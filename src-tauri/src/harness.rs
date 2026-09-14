@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::runtime::{
     check_dsh_update, ensure_managed_runtime, ensure_path_for_gui, update_managed_runtime,
@@ -395,13 +395,6 @@ fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<S
     ))
 }
 
-fn navigate_main(app: &AppHandle, url: &str) -> Result<(), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window missing".to_string())?;
-    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
-    window.navigate(parsed).map_err(|e| e.to_string())
-}
 
 pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
     thread::spawn(move || {
@@ -488,15 +481,7 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
         }
 
         emit(&app, HarnessEvent::Ready { url: url.clone() });
-
-        if let Err(e) = navigate_main(&app, &url) {
-            emit(
-                &app,
-                HarnessEvent::Error {
-                    message: format!("打开 Web UI 失败 / navigate failed: {e}"),
-                },
-            );
-        }
+        // Frontend listens for Ready and sets window.location to the token URL.
     });
 }
 

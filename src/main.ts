@@ -93,6 +93,11 @@ window.addEventListener("DOMContentLoaded", async () => {
         break;
       case "ready":
         setStatus(`已就绪，正在打开 ${payload.url}`);
+        // Prefer in-webview navigation; Rust window.navigate was closing the
+        // macOS window in packaged builds.
+        window.setTimeout(() => {
+          window.location.href = payload.url;
+        }, 50);
         break;
       case "error":
         showError(payload.message);
