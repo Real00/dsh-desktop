@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::runtime::{
     check_dsh_update, ensure_managed_runtime, ensure_path_for_gui, update_managed_runtime,
@@ -490,8 +490,38 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
         }
 
         emit(&app, HarnessEvent::Ready { url: url.clone() });
-        // Frontend listens for Ready and sets window.location to the token URL.
+
+        if let Err(e) = open_dsh_window(&app, &url) {
+            emit(
+                &app,
+                HarnessEvent::Error {
+                    message: format!("打开 Web UI 失败 / open window failed: {e}"),
+                },
+            );
+        }
     });
+}
+
+/// Open dsh in a webview whose *first* document is the token URL.
+/// Navigating from the asset:// splash is cross-site, so SameSite=Strict
+/// auth cookies never stick and the UI shows "authentication required".
+fn open_dsh_window(app: &AppHandle, url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
+    // Close prior harness window if restarting.
+    if let Some(w) = app.get_webview_window("harness") {
+        let _ = w.close();
+    }
+    WebviewWindowBuilder::new(app, "harness", WebviewUrl::External(parsed))
+        .title("DSH Desktop")
+        .inner_size(1280.0, 840.0)
+        .min_inner_size(960.0, 640.0)
+        .focused(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    if let Some(splash) = app.get_webview_window("main") {
+        let _ = splash.close();
+    }
+    Ok(())
 }
 
 pub fn cmd_check_dsh_update() -> Result<serde_json::Value, String> {

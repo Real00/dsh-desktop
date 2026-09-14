@@ -75,10 +75,8 @@ async function doUpdateRuntime() {
 }
 
 
-function embedDsh(url: string) {
-  // Top-level navigation so the token 303 Set-Cookie is first-party.
-  // iframe embedding is treated as third-party and shows auth required.
-  window.location.replace(url);
+function embedDsh(_url: string) {
+  // Rust opens a dedicated webview on the token URL (first-party cookies).
 }
 
 
@@ -87,7 +85,6 @@ async function pollExistingUrl() {
     const url = await invoke<string | null>("harness_url");
     if (url) {
       setStatus(`已就绪，正在打开 ${url}`);
-      embedDsh(url);
       return true;
     }
   } catch {
@@ -127,7 +124,6 @@ window.addEventListener("DOMContentLoaded", async () => {
         setStatus(`已就绪，正在打开 ${payload.url}`);
         // Keep the Tauri window origin; full document navigation to localhost
         // was leaving a running process with zero windows on macOS.
-        embedDsh(payload.url);
         break;
       case "error":
         showError(payload.message);
