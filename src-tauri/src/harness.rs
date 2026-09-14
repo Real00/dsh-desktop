@@ -318,13 +318,18 @@ fn http_page_ready(url: &str) -> bool {
     match agent.get(url).call() {
         Ok(resp) => {
             let status = resp.status();
+            // dsh web often answers 401 until the ?token= URL is used;
+            // any HTTP response from the harness means the listener is up.
+            if status == 401 || status == 403 {
+                return true;
+            }
             if !(200..400).contains(&status) {
                 return false;
             }
             let body = resp.into_string().unwrap_or_default();
             // DSH web serves an HTML shell; require non-trivial content.
-            body.len() > 64
-                && (body.contains('<') || body.contains('{') || body.contains("dsh"))
+            body.len() > 32
+                && (body.contains('<') || body.contains('{') || body.contains("dsh") || body.contains("token"))
         }
         Err(_) => false
     }
