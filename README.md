@@ -5,9 +5,10 @@
 打开应用后会自动：
 
 1. 检测本机 `dsh` 或 `npx`
-2. 启动 `dsh web`（随机本机端口）
-3. 等待就绪后在窗口内打开官方 Web UI
-4. 退出时结束子进程
+2. **首次启动**安装默认插件 [`dshmarket`](https://www.npmjs.com/package/dshmarket)（插件市场）
+3. 启动 `dsh web`（随机本机端口）
+4. 等待就绪后在窗口内打开官方 Web UI
+5. 退出时结束子进程
 
 > 本项目**不重写** DSH Web UI，只做原生窗口托管与进程管理。
 
@@ -64,6 +65,23 @@ npm run tauri build
 - `APPLE_ID`
 - `APPLE_PASSWORD`
 - `APPLE_TEAM_ID`
+
+## 默认插件
+
+首次启动会执行：
+
+```bash
+dsh plugin --profile web add dshmarket
+```
+
+（若本机没有全局 `dsh`，则通过 `npx @deepseek-ai/dsh …` 等价执行。）
+
+已安装检测：
+
+- `~/.dsh/profiles/web/package.json` 是否包含 `dshmarket`
+- 或标记文件 `~/.dsh-desktop/bootstrap-plugins.json`
+
+安装失败不会阻止启动；可稍后在 DSH **设置 → 插件市场** 自行处理。
 
 ## 技术说明
 

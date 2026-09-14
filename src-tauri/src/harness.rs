@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -9,13 +10,16 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 const DEFAULT_PACKAGE: &str = "@deepseek-ai/dsh";
+const DEFAULT_PLUGIN: &str = "dshmarket";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
+const PLUGIN_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HarnessEvent {
     Checking { message: String },
+    Installing { message: String },
     Starting { message: String },
     Ready { url: String },
     Error { message: String },
@@ -61,6 +65,75 @@ fn emit(app: &AppHandle, event: HarnessEvent) {
     let _ = app.emit("harness", event);
 }
 
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
+
+fn web_profile_package_json() -> Option<PathBuf> {
+    Some(home_dir()?.join(".dsh").join("profiles").join("web").join("package.json"))
+}
+
+fn bootstrap_marker_path() -> Option<PathBuf> {
+    Some(
+        home_dir()?
+            .join(".dsh-desktop")
+            .join("bootstrap-plugins.json"),
+    )
+}
+
+fn package_json_mentions_dshmarket(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    // package name on npm is `dshmarket`
+    text.contains("\"dshmarket\"")
+}
+
+fn marker_says_installed(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    text.contains(DEFAULT_PLUGIN) || text.contains("dshmarket")
+}
+
+fn is_dshmarket_installed() -> bool {
+    if let Some(pkg) = web_profile_package_json() {
+        if package_json_mentions_dshmarket(&pkg) {
+            return true;
+        }
+    }
+    if let Some(marker) = bootstrap_marker_path() {
+        if marker_says_installed(&marker) {
+            return true;
+        }
+    }
+    false
+}
+
+fn write_bootstrap_marker() -> Result<(), String> {
+    let path = bootstrap_marker_path().ok_or_else(|| "cannot resolve home dir".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let body = format!(
+        "{{\n  \"plugins\": [\"{DEFAULT_PLUGIN}\"],\n  \"installedAt\": \"{}\"\n}}\n",
+        chrono_like_now()
+    );
+    std::fs::write(&path, body).map_err(|e| e.to_string())
+}
+
+fn chrono_like_now() -> String {
+    // Avoid pulling chrono just for a marker timestamp.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{secs}")
+}
+
 fn find_free_port() -> Result<u16, String> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
@@ -93,9 +166,9 @@ fn which(bin: &str) -> Option<String> {
     }
 }
 
-fn resolve_launcher() -> Result<(String, Vec<String>), String> {
+fn resolve_dsh_cli() -> Result<(String, Vec<String>), String> {
     if which("dsh").is_some() {
-        return Ok(("dsh".into(), vec!["web".into()]));
+        return Ok(("dsh".into(), vec![]));
     }
 
     let npx = which("npx").ok_or_else(|| {
@@ -106,12 +179,135 @@ fn resolve_launcher() -> Result<(String, Vec<String>), String> {
 
     Ok((
         npx,
-        vec![
-            "--yes".into(),
-            DEFAULT_PACKAGE.into(),
-            "web".into(),
-        ],
+        vec!["--yes".into(), DEFAULT_PACKAGE.into()],
     ))
+}
+
+fn resolve_launcher() -> Result<(String, Vec<String>), String> {
+    let (program, mut prefix) = resolve_dsh_cli()?;
+    prefix.push("web".into());
+    Ok((program, prefix))
+}
+
+fn run_command(program: &str, args: &[String]) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command.args(args).stdin(Stdio::null());
+
+    if let Ok(path) = std::env::var("PATH") {
+        command.env("PATH", path);
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let output = command
+        .output()
+        .map_err(|e| format!("执行失败 / command failed ({program}): {e}"))?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(format!(
+        "命令失败 / command exited {}: {}\n{}",
+        output.status,
+        stderr.trim(),
+        stdout.trim()
+    ))
+}
+
+fn ensure_default_plugins(app: &AppHandle) {
+    if is_dshmarket_installed() {
+        return;
+    }
+
+    emit(
+        app,
+        HarnessEvent::Installing {
+            message: format!("首次启动：正在安装默认插件 {DEFAULT_PLUGIN}…"),
+        },
+    );
+
+    let (program, mut args) = match resolve_dsh_cli() {
+        Ok(v) => v,
+        Err(e) => {
+            emit(
+                app,
+                HarnessEvent::Installing {
+                    message: format!("跳过插件安装（{e}）"),
+                },
+            );
+            return;
+        }
+    };
+
+    args.extend([
+        "plugin".into(),
+        "--profile".into(),
+        "web".into(),
+        "add".into(),
+        DEFAULT_PLUGIN.into(),
+    ]);
+
+    // Soft timeout: spawn + wait with a watchdog feel via thread join timeout pattern.
+    let program_clone = program.clone();
+    let args_clone = args.clone();
+    let handle = thread::spawn(move || run_command(&program_clone, &args_clone));
+
+    let started = Instant::now();
+    loop {
+        if handle.is_finished() {
+            break;
+        }
+        if started.elapsed() > PLUGIN_INSTALL_TIMEOUT {
+            emit(
+                app,
+                HarnessEvent::Installing {
+                    message: format!(
+                        "安装 {DEFAULT_PLUGIN} 超时，将继续启动（可稍后在设置里手动安装）"
+                    ),
+                },
+            );
+            // Detach: leave the install thread running; do not block app start forever.
+            return;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    match handle.join() {
+        Ok(Ok(())) => {
+            let _ = write_bootstrap_marker();
+            emit(
+                app,
+                HarnessEvent::Installing {
+                    message: format!("{DEFAULT_PLUGIN} 已安装"),
+                },
+            );
+        }
+        Ok(Err(e)) => {
+            // Non-fatal: still launch the shell; user can install from docs later.
+            emit(
+                app,
+                HarnessEvent::Installing {
+                    message: format!("默认插件安装失败（将继续启动）：{e}"),
+                },
+            );
+        }
+        Err(_) => {
+            emit(
+                app,
+                HarnessEvent::Installing {
+                    message: "默认插件安装线程异常，将继续启动".into(),
+                },
+            );
+        }
+    }
 }
 
 fn spawn_harness(port: u16) -> Result<Child, String> {
@@ -246,6 +442,8 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
                 message: "检查 Node.js / dsh…".into(),
             },
         );
+
+        ensure_default_plugins(&app);
 
         let port = match find_free_port() {
             Ok(p) => p,

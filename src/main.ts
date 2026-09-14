@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 
 type HarnessEvent =
   | { kind: "checking"; message: string }
+  | { kind: "installing"; message: string }
   | { kind: "starting"; message: string }
   | { kind: "ready"; url: string }
   | { kind: "error"; message: string };
@@ -55,6 +56,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     const payload = event.payload;
     switch (payload.kind) {
       case "checking":
+      case "installing":
       case "starting":
         clearError();
         setStatus(payload.message);
