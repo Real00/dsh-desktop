@@ -377,7 +377,13 @@ fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<S
         }
 
         // Prefer the stdout URL (includes ?token=). Bare port often returns 401.
+        // IMPORTANT: never HTTP-probe a tokenized URL — the token is one-time and
+        // probing it consumes auth before the webview can open it.
         if let Some(candidate) = discovered.clone() {
+            if candidate.contains("token=") {
+                thread::sleep(Duration::from_millis(300));
+                return Ok(candidate);
+            }
             if http_page_ready(&candidate) {
                 thread::sleep(Duration::from_millis(500));
                 return Ok(candidate);
