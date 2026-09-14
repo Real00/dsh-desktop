@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -10,10 +10,35 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 const DEFAULT_PACKAGE: &str = "@deepseek-ai/dsh";
-const DEFAULT_PLUGIN: &str = "dshmarket";
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
-const PLUGIN_INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
+const PLUGIN_INSTALL_TIMEOUT: Duration = Duration::from_secs(240);
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
+
+struct DefaultPlugin {
+    id: &'static str,
+    /// Passed to `dsh plugin --profile web add <spec>`
+    install_spec: &'static str,
+    /// Strings that indicate the plugin is already present in package.json / marker.
+    detect_needles: &'static [&'static str],
+}
+
+const DEFAULT_PLUGINS: &[DefaultPlugin] = &[
+    DefaultPlugin {
+        id: "dshmarket",
+        install_spec: "dshmarket",
+        detect_needles: &["dshmarket"],
+    },
+    DefaultPlugin {
+        id: "dsh-modellix",
+        install_spec: "dsh-modellix",
+        detect_needles: &["dsh-modellix"],
+    },
+    DefaultPlugin {
+        id: "loopx",
+        install_spec: "github:huangruiteng/loopx",
+        detect_needles: &["loopx", "dsh-loopx", "dsh-loopx-plugin"],
+    },
+];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -72,7 +97,13 @@ fn home_dir() -> Option<PathBuf> {
 }
 
 fn web_profile_package_json() -> Option<PathBuf> {
-    Some(home_dir()?.join(".dsh").join("profiles").join("web").join("package.json"))
+    Some(
+        home_dir()?
+            .join(".dsh")
+            .join("profiles")
+            .join("web")
+            .join("package.json"),
+    )
 }
 
 fn bootstrap_marker_path() -> Option<PathBuf> {
@@ -83,49 +114,51 @@ fn bootstrap_marker_path() -> Option<PathBuf> {
     )
 }
 
-fn package_json_mentions_dshmarket(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    // package name on npm is `dshmarket`
-    text.contains("\"dshmarket\"")
+fn text_mentions_any(text: &str, needles: &[&str]) -> bool {
+    let lower = text.to_ascii_lowercase();
+    needles
+        .iter()
+        .any(|n| lower.contains(&n.to_ascii_lowercase()))
 }
 
-fn marker_says_installed(path: &Path) -> bool {
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    text.contains(DEFAULT_PLUGIN) || text.contains("dshmarket")
-}
-
-fn is_dshmarket_installed() -> bool {
+fn is_plugin_installed(plugin: &DefaultPlugin) -> bool {
     if let Some(pkg) = web_profile_package_json() {
-        if package_json_mentions_dshmarket(&pkg) {
-            return true;
+        if let Ok(text) = std::fs::read_to_string(&pkg) {
+            if text_mentions_any(&text, plugin.detect_needles) {
+                return true;
+            }
         }
     }
     if let Some(marker) = bootstrap_marker_path() {
-        if marker_says_installed(&marker) {
-            return true;
+        if let Ok(text) = std::fs::read_to_string(&marker) {
+            if text_mentions_any(&text, plugin.detect_needles)
+                || text_mentions_any(&text, &[plugin.id])
+            {
+                return true;
+            }
         }
     }
     false
 }
 
-fn write_bootstrap_marker() -> Result<(), String> {
+fn write_bootstrap_marker(installed_ids: &[&str]) -> Result<(), String> {
     let path = bootstrap_marker_path().ok_or_else(|| "cannot resolve home dir".to_string())?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    let plugins_json = installed_ids
+        .iter()
+        .map(|id| format!("\"{id}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let body = format!(
-        "{{\n  \"plugins\": [\"{DEFAULT_PLUGIN}\"],\n  \"installedAt\": \"{}\"\n}}\n",
+        "{{\n  \"plugins\": [{plugins_json}],\n  \"installedAt\": \"{}\"\n}}\n",
         chrono_like_now()
     );
     std::fs::write(&path, body).map_err(|e| e.to_string())
 }
 
 fn chrono_like_now() -> String {
-    // Avoid pulling chrono just for a marker timestamp.
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -222,19 +255,47 @@ fn run_command(program: &str, args: &[String]) -> Result<(), String> {
     ))
 }
 
+fn install_one_plugin(program: &str, prefix: &[String], spec: &str) -> Result<(), String> {
+    let mut args = prefix.to_vec();
+    args.extend([
+        "plugin".into(),
+        "--profile".into(),
+        "web".into(),
+        "add".into(),
+        spec.into(),
+    ]);
+
+    let program_clone = program.to_string();
+    let args_clone = args.clone();
+    let handle = thread::spawn(move || run_command(&program_clone, &args_clone));
+
+    let started = Instant::now();
+    loop {
+        if handle.is_finished() {
+            break;
+        }
+        if started.elapsed() > PLUGIN_INSTALL_TIMEOUT {
+            return Err(format!("安装超时 / install timed out: {spec}"));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+
+    handle
+        .join()
+        .map_err(|_| "install thread panicked".to_string())?
+}
+
 fn ensure_default_plugins(app: &AppHandle) {
-    if is_dshmarket_installed() {
+    let missing: Vec<&DefaultPlugin> = DEFAULT_PLUGINS
+        .iter()
+        .filter(|p| !is_plugin_installed(p))
+        .collect();
+
+    if missing.is_empty() {
         return;
     }
 
-    emit(
-        app,
-        HarnessEvent::Installing {
-            message: format!("首次启动：正在安装默认插件 {DEFAULT_PLUGIN}…"),
-        },
-    );
-
-    let (program, mut args) = match resolve_dsh_cli() {
+    let (program, prefix) = match resolve_dsh_cli() {
         Ok(v) => v,
         Err(e) => {
             emit(
@@ -247,67 +308,42 @@ fn ensure_default_plugins(app: &AppHandle) {
         }
     };
 
-    args.extend([
-        "plugin".into(),
-        "--profile".into(),
-        "web".into(),
-        "add".into(),
-        DEFAULT_PLUGIN.into(),
-    ]);
+    let mut installed_ids: Vec<&str> = DEFAULT_PLUGINS
+        .iter()
+        .filter(|p| is_plugin_installed(p))
+        .map(|p| p.id)
+        .collect();
 
-    // Soft timeout: spawn + wait with a watchdog feel via thread join timeout pattern.
-    let program_clone = program.clone();
-    let args_clone = args.clone();
-    let handle = thread::spawn(move || run_command(&program_clone, &args_clone));
+    for plugin in missing {
+        emit(
+            app,
+            HarnessEvent::Installing {
+                message: format!("正在安装默认插件 {}…", plugin.id),
+            },
+        );
 
-    let started = Instant::now();
-    loop {
-        if handle.is_finished() {
-            break;
+        match install_one_plugin(&program, &prefix, plugin.install_spec) {
+            Ok(()) => {
+                installed_ids.push(plugin.id);
+                emit(
+                    app,
+                    HarnessEvent::Installing {
+                        message: format!("{} 已安装", plugin.id),
+                    },
+                );
+            }
+            Err(e) => {
+                emit(
+                    app,
+                    HarnessEvent::Installing {
+                        message: format!("{} 安装失败（将继续）：{e}", plugin.id),
+                    },
+                );
+            }
         }
-        if started.elapsed() > PLUGIN_INSTALL_TIMEOUT {
-            emit(
-                app,
-                HarnessEvent::Installing {
-                    message: format!(
-                        "安装 {DEFAULT_PLUGIN} 超时，将继续启动（可稍后在设置里手动安装）"
-                    ),
-                },
-            );
-            // Detach: leave the install thread running; do not block app start forever.
-            return;
-        }
-        thread::sleep(Duration::from_millis(200));
     }
 
-    match handle.join() {
-        Ok(Ok(())) => {
-            let _ = write_bootstrap_marker();
-            emit(
-                app,
-                HarnessEvent::Installing {
-                    message: format!("{DEFAULT_PLUGIN} 已安装"),
-                },
-            );
-        }
-        Ok(Err(e)) => {
-            // Non-fatal: still launch the shell; user can install from docs later.
-            emit(
-                app,
-                HarnessEvent::Installing {
-                    message: format!("默认插件安装失败（将继续启动）：{e}"),
-                },
-            );
-        }
-        Err(_) => {
-            emit(
-                app,
-                HarnessEvent::Installing {
-                    message: "默认插件安装线程异常，将继续启动".into(),
-                },
-            );
-        }
-    }
+    let _ = write_bootstrap_marker(&installed_ids);
 }
 
 fn spawn_harness(port: u16) -> Result<Child, String> {
