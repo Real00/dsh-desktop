@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DSH Desktop</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <div class="card">
+        <div class="brand">DSH Desktop</div>
+        <p class="subtitle">DeepSeek Harness · 开箱即用桌面壳</p>
+        <div class="spinner" aria-hidden="true"></div>
+        <p id="status" class="status">正在启动…</p>
+        <pre id="detail" class="detail" hidden></pre>
+        <button id="retry" class="retry" type="button" hidden>重试</button>
+        <p class="hint">首次启动会通过 npx 拉取 @deepseek-ai/dsh，可能需要一会儿。</p>
+      </div>
+    </main>
+  </body>
+</html>

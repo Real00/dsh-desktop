@@ -1,0 +1,112 @@
+:root {
+  color-scheme: dark;
+  font-family: "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  background: #0b1020;
+  color: #e8eefc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(1200px 600px at 20% -10%, #1a3a7a55, transparent),
+    radial-gradient(900px 500px at 90% 10%, #5b2d9155, transparent),
+    #0b1020;
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.card {
+  width: min(440px, 100%);
+  padding: 32px 28px 24px;
+  border-radius: 20px;
+  background: rgba(16, 22, 40, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
+.brand {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.subtitle {
+  margin: 6px 0 24px;
+  color: #9db0d4;
+  font-size: 0.95rem;
+}
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: #6ea8ff;
+  animation: spin 0.9s linear infinite;
+}
+
+.shell.error .spinner {
+  display: none;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.status {
+  margin: 0;
+  font-size: 1rem;
+  color: #d7e3ff;
+}
+
+.detail {
+  margin: 12px 0 0;
+  padding: 12px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  color: #ffb4b4;
+  background: rgba(255, 80, 80, 0.08);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 120, 120, 0.2);
+}
+
+.retry {
+  margin-top: 16px;
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 18px;
+  background: linear-gradient(135deg, #4f8cff, #7a5cff);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.retry:hover {
+  filter: brightness(1.08);
+}
+
+.hint {
+  margin: 18px 0 0;
+  color: #7f91b3;
+  font-size: 0.8rem;
+}
