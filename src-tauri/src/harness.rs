@@ -318,18 +318,16 @@ fn http_page_ready(url: &str) -> bool {
     match agent.get(url).call() {
         Ok(resp) => {
             let status = resp.status();
-            // dsh web often answers 401 until the ?token= URL is used;
-            // any HTTP response from the harness means the listener is up.
+            // Untokenized local dsh answers 401; that is NOT a navigable UI.
             if status == 401 || status == 403 {
-                return true;
+                return url.contains("token=");
             }
             if !(200..400).contains(&status) {
                 return false;
             }
             let body = resp.into_string().unwrap_or_default();
-            // DSH web serves an HTML shell; require non-trivial content.
             body.len() > 32
-                && (body.contains('<') || body.contains('{') || body.contains("dsh") || body.contains("token"))
+                && (body.contains('<') || body.contains('{') || body.contains("dsh"))
         }
         Err(_) => false
     }
@@ -371,11 +369,16 @@ fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<S
             return Err(format!("dsh 进程提前退出 / exited early: {status}"));
         }
 
-        let candidate = discovered.clone().unwrap_or_else(|| fallback.clone());
-        if http_page_ready(&candidate) {
-            // Brief settle — UI assets may still be warming.
+        // Prefer the stdout URL (includes ?token=). Bare port often returns 401.
+        if let Some(candidate) = discovered.clone() {
+            if http_page_ready(&candidate) {
+                thread::sleep(Duration::from_millis(500));
+                return Ok(candidate);
+            }
+        } else if http_page_ready(&fallback) {
+            // Rare: server serves UI without token.
             thread::sleep(Duration::from_millis(500));
-            return Ok(candidate);
+            return Ok(fallback.clone());
         }
 
         thread::sleep(POLL_INTERVAL);
