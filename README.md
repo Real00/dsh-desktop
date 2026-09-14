@@ -14,7 +14,7 @@
 
 ## 前置条件
 
-- Windows 10+（当前 CI 只打 Windows 包；本机也可在 macOS/Linux 开发）
+- Windows 10+ / macOS 11+ Apple Silicon（CI 打 Windows NSIS + macOS arm64；不做 Intel Mac）
 - [Node.js](https://nodejs.org/) **≥ 22.19**（运行时用来拉起 `@deepseek-ai/dsh`）
 - 开发还需要：Rust stable、系统 WebView 依赖（见 [Tauri prerequisites](https://tauri.app/start/prerequisites/)）
 
@@ -39,19 +39,20 @@ npm run tauri build
 # 产物通常在 src-tauri/target/release/bundle/nsis
 ```
 
-## GitHub Actions（Windows 包）
+## GitHub Actions
 
 | 文件 | 作用 |
 | --- | --- |
 | `.github/workflows/ci.yml` | PR / push 时构建前端 |
 | `.github/workflows/release-windows.yml` | 打 **Windows NSIS** 安装包 |
+| `.github/workflows/release-macos.yml` | 打 **Apple Silicon** `.dmg` / `.app`（不做 Intel） |
 
 触发方式：
 
-- 推送标签：`git tag v0.1.1 && git push origin v0.1.1`
+- 推送标签：`git tag v0.1.2 && git push origin v0.1.2`
 - 或在 Actions 里手动 `workflow_dispatch`
 
-产物通过 `tauri-apps/tauri-action` 发到 **Draft Release**（`.exe` / NSIS）。
+产物通过 `tauri-apps/tauri-action` 发到 **Draft Release**（Windows `.exe` / NSIS，macOS arm64 `.dmg`）。
 
 ## 默认插件
 
