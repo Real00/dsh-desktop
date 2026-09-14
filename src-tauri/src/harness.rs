@@ -31,11 +31,8 @@ const DEFAULT_PLUGINS: &[DefaultPlugin] = &[
         install_spec: "dshmarket",
         detect_needles: &["dshmarket"],
     },
-    DefaultPlugin {
-        id: "dsh-modellix",
-        install_spec: "dsh-modellix",
-        detect_needles: &["dsh-modellix"],
-    },
+    // dsh-modellix currently crashes `dsh web` with:
+    // cannot get property "webServer" without inject — omit until compatible.
     DefaultPlugin {
         id: "loopx",
         install_spec: "github:huangruiteng/loopx",
@@ -329,20 +326,7 @@ fn http_page_ready(url: &str) -> bool {
             body.len() > 64
                 && (body.contains('<') || body.contains('{') || body.contains("dsh"))
         }
-        Err(_) => {
-            // Fallback: port accept
-            let Ok(parsed) = url::Url::parse(url) else {
-                return false;
-            };
-            let host = parsed.host_str().unwrap_or("127.0.0.1");
-            let port = parsed.port_or_known_default().unwrap_or(80);
-            let addr: SocketAddr = if host == "localhost" || host == "127.0.0.1" {
-                SocketAddr::from(([127, 0, 0, 1], port))
-            } else {
-                return false;
-            };
-            TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
-        }
+        Err(_) => false
     }
 }
 
