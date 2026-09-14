@@ -1,7 +1,7 @@
  
 
 use std::io::{BufRead, BufReader};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
@@ -272,7 +272,7 @@ fn spawn_harness(node: &str, bin_js: &PathBuf, port: u16) -> Result<Child, Strin
     let mut command = Command::new(node);
     command
         .arg(bin_js)
-        .args(["web", "--port", &port.to_string()])
+        .args(["web", "--port", &port.to_string(), "--no-open"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
@@ -318,9 +318,13 @@ fn http_page_ready(url: &str) -> bool {
     match agent.get(url).call() {
         Ok(resp) => {
             let status = resp.status();
-            // Untokenized local dsh answers 401; that is NOT a navigable UI.
+            // Token handshake often returns 303 with empty body (Set-Cookie / Location).
+            // Untokenized local dsh answers 401 — not navigable.
+            if url.contains("token=") && (200..400).contains(&status) {
+                return true;
+            }
             if status == 401 || status == 403 {
-                return url.contains("token=");
+                return false;
             }
             if !(200..400).contains(&status) {
                 return false;
