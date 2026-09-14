@@ -491,11 +491,22 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
 
         emit(&app, HarnessEvent::Ready { url: url.clone() });
 
-        if let Err(e) = open_dsh_window(&app, &url) {
+        let app_open = app.clone();
+        let url_open = url.clone();
+        if let Err(e) = app.run_on_main_thread(move || {
+            if let Err(err) = open_dsh_window(&app_open, &url_open) {
+                emit(
+                    &app_open,
+                    HarnessEvent::Error {
+                        message: format!("打开 Web UI 失败 / open window failed: {err}"),
+                    },
+                );
+            }
+        }) {
             emit(
                 &app,
                 HarnessEvent::Error {
-                    message: format!("打开 Web UI 失败 / open window failed: {e}"),
+                    message: format!("无法在主线程打开窗口 / main thread schedule failed: {e}"),
                 },
             );
         }
