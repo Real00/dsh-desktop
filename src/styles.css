@@ -273,3 +273,71 @@ body {
 .app-update-progress.error {
   color: #ffb4b4;
 }
+
+.boot-steps {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  justify-content: center;
+}
+
+.boot-steps li {
+  font-size: 0.72rem;
+  color: #5f7194;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.boot-steps li.active {
+  color: #d7e3ff;
+  border-color: rgba(110, 168, 255, 0.45);
+  background: rgba(79, 140, 255, 0.12);
+}
+
+.boot-steps li.done {
+  color: #6b7f9e;
+  text-decoration: line-through;
+  text-decoration-color: rgba(107, 127, 158, 0.5);
+}
+
+.shell.error .boot-steps {
+  opacity: 0.55;
+}
+
+.gatekeeper-note {
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  color: #9db0d4;
+  text-align: left;
+}
+
+.app-update-bar-wrap {
+  margin-top: 10px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.app-update-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #4f8cff, #7a5cff);
+  transition: width 0.15s ease;
+}
+
+.app-update-bar.indeterminate {
+  width: 35%;
+  animation: bar-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes bar-slide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(320%); }
+}

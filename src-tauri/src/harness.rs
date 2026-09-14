@@ -243,7 +243,7 @@ fn ensure_default_plugins(app: &AppHandle, node: &str, bin_js: &PathBuf) {
         emit(
             app,
             HarnessEvent::Installing {
-                message: format!("正在安装默认插件 {}…", plugin.id),
+                message: format!("安装插件 {}…", plugin.id),
             },
         );
         match install_one_plugin(node, bin_js, plugin.install_spec) {
@@ -252,7 +252,7 @@ fn ensure_default_plugins(app: &AppHandle, node: &str, bin_js: &PathBuf) {
                 emit(
                     app,
                     HarnessEvent::Installing {
-                        message: format!("{} 已安装", plugin.id),
+                        message: format!("插件 {} 已就绪", plugin.id),
                     },
                 );
             }
@@ -415,16 +415,23 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
         emit(
             &app,
             HarnessEvent::Checking {
-                message: "检查本地托管运行时…".into(),
+                message: "检查运行时…".into(),
             },
         );
 
         let app_for_progress = app.clone();
-        let (node, bin_js) = match ensure_managed_runtime(move |msg| {
-            emit(
-                &app_for_progress,
-                HarnessEvent::Installing { message: msg },
-            );
+        let (node, bin_js) = match ensure_managed_runtime(move |installing, msg| {
+            if installing {
+                emit(
+                    &app_for_progress,
+                    HarnessEvent::Installing { message: msg },
+                );
+            } else {
+                emit(
+                    &app_for_progress,
+                    HarnessEvent::Checking { message: msg },
+                );
+            }
         }) {
             Ok(v) => v,
             Err(e) => {
@@ -462,7 +469,7 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
         emit(
             &app,
             HarnessEvent::Starting {
-                message: format!("正在启动本地 dsh（端口 {port}）…"),
+                message: format!("正在启动 dsh（端口 {port}）…"),
             },
         );
 
@@ -492,6 +499,12 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
             guard.port = Some(port);
         }
 
+        emit(
+            &app,
+            HarnessEvent::Starting {
+                message: "正在打开界面…".into(),
+            },
+        );
         emit(&app, HarnessEvent::Ready { url: url.clone() });
 
         let app_open = app.clone();

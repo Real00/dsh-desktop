@@ -41,10 +41,21 @@
         <p class="subtitle boot-sub">DeepSeek Harness · 本地托管运行时</p>
         <div class="spinner" aria-hidden="true"></div>
         <p id="status" class="status boot-status">正在启动…</p>
+
+        <ol id="boot-steps" class="boot-steps" aria-label="启动步骤">
+          <li data-step="check" class="active">检查运行时</li>
+          <li data-step="install" hidden>安装运行时</li>
+          <li data-step="plugins" hidden>默认插件</li>
+          <li data-step="start">启动 dsh</li>
+          <li data-step="open">打开界面</li>
+        </ol>
+
         <pre id="detail" class="detail" hidden></pre>
+        <p id="gatekeeper-note" class="gatekeeper-note" hidden></p>
         <p id="update" class="update" hidden></p>
         <div class="actions">
           <button id="retry" class="retry" type="button" hidden>重试</button>
+          <button id="copy-error" class="retry secondary" type="button" hidden>复制错误信息</button>
           <button id="update-btn" class="retry secondary" type="button" hidden>更新 dsh 运行时</button>
         </div>
 
@@ -53,6 +64,10 @@
           <div class="app-update-actions">
             <button id="app-update-download" class="retry" type="button">下载更新</button>
             <button id="app-update-later" class="retry secondary" type="button">稍后再说</button>
+            <button id="app-update-open-folder" class="retry secondary" type="button" hidden>打开下载文件夹</button>
+          </div>
+          <div id="app-update-bar-wrap" class="app-update-bar-wrap" hidden>
+            <div id="app-update-bar" class="app-update-bar"></div>
           </div>
           <p id="app-update-progress" class="app-update-progress" hidden></p>
         </div>
@@ -91,7 +106,7 @@
           </div>
         </details>
 
-        <p class="hint">运行时缓存在 ~/.dsh-desktop/runtime；可用下方配置 npm 源。</p>
+        <p class="hint">运行时缓存 ~/.dsh-desktop/runtime；npm 源可在下方配置。</p>
       </div>
     </main>
   </body>

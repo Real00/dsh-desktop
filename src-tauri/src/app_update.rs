@@ -1,7 +1,7 @@
 //! Application (desktop shell) remote update via GitHub Releases.
 
 use std::fs::{self, File};
-use std::io::{self, Read};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -154,7 +154,11 @@ pub fn check_app_update() -> Result<serde_json::Value, String> {
 }
 
 /// Download an update asset to `~/.dsh-desktop/updates/` and return the local path.
-pub fn download_app_update(url: &str) -> Result<serde_json::Value, String> {
+/// `progress` is called periodically with `(received_bytes, total_bytes_opt)`.
+pub fn download_app_update<F>(url: &str, mut progress: F) -> Result<serde_json::Value, String>
+where
+    F: FnMut(u64, Option<u64>),
+{
     if url.is_empty() {
         return Err("download url is empty".into());
     }
@@ -194,21 +198,67 @@ pub fn download_app_update(url: &str) -> Result<serde_json::Value, String> {
         return Err(format!("download HTTP {}", resp.status()));
     }
 
+    let total = resp
+        .header("Content-Length")
+        .and_then(|s| s.parse::<u64>().ok());
+
     let mut reader = resp.into_reader();
     let mut file = File::create(&dest).map_err(|e| format!("create file: {e}"))?;
-    // Limit to ~1 GiB to avoid runaway downloads
-    let mut limited = reader.by_ref().take(1024 * 1024 * 1024);
-    io::copy(&mut limited, &mut file).map_err(|e| format!("write file: {e}"))?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut received: u64 = 0;
+    let max_bytes: u64 = 1024 * 1024 * 1024;
+    let mut last_emit = 0u64;
+
+    progress(0, total);
+
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| format!("read download: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n])
+            .map_err(|e| format!("write file: {e}"))?;
+        received = received.saturating_add(n as u64);
+        if received > max_bytes {
+            return Err("download exceeded 1 GiB limit".into());
+        }
+        // Emit at least every 256 KiB to keep the splash responsive without flooding.
+        if received == n as u64 || received - last_emit >= 256 * 1024 || total == Some(received) {
+            progress(received, total);
+            last_emit = received;
+        }
+    }
+    progress(received, total.or(Some(received)));
 
     Ok(json!({
         "path": dest.to_string_lossy(),
+        "bytes": received,
     }))
+}
+
+pub fn updates_dir_path() -> Result<String, String> {
+    Ok(updates_dir()?.to_string_lossy().to_string())
 }
 
 pub fn cmd_check_app_update() -> Result<serde_json::Value, String> {
     check_app_update()
 }
 
-pub fn cmd_download_app_update(url: String) -> Result<serde_json::Value, String> {
-    download_app_update(&url)
+pub fn cmd_download_app_update(
+    app: &tauri::AppHandle,
+    url: String,
+) -> Result<serde_json::Value, String> {
+    use tauri::Emitter;
+    download_app_update(&url, |received, total| {
+        let _ = app.emit(
+            "app-update",
+            json!({
+                "kind": "progress",
+                "received": received,
+                "total": total,
+            }),
+        );
+    })
 }

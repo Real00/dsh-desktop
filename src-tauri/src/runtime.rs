@@ -120,9 +120,11 @@ fn runtime_ready() -> bool {
 
 /// Ensure a local managed install exists under ~/.dsh-desktop/runtime.
 /// Does NOT use npx on subsequent launches.
+/// Progress callback: `(installing, message)` — `installing` is false when
+/// reusing an existing local runtime.
 pub fn ensure_managed_runtime<F>(mut progress: F) -> Result<(String, PathBuf), String>
 where
-    F: FnMut(String),
+    F: FnMut(bool, String),
 {
     ensure_path_for_gui();
     let node = find_node()?;
@@ -130,16 +132,15 @@ where
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
     if runtime_ready() {
-        progress(format!(
-            "使用本地托管 dsh（{}）",
-            read_installed_version().unwrap_or_else(|| "unknown".into())
-        ));
+        let ver = read_installed_version().unwrap_or_else(|| "unknown".into());
+        progress(false, format!("使用本地运行时（{ver}）…"));
         return Ok((node, runtime_bin_js()?));
     }
 
-    progress(format!(
-        "首次安装托管运行时 {DSH_PACKAGE}@{PINNED_DSH_VERSION}（只需一次）…"
-    ));
+    progress(
+        true,
+        format!("正在安装运行时 {DSH_PACKAGE}@{PINNED_DSH_VERSION}…"),
+    );
 
     // Minimal package.json so npm install is reproducible in this folder.
     let pkg_json = dir.join("package.json");
@@ -184,7 +185,7 @@ where
     }
 
     fs::write(installed_version_file()?, PINNED_DSH_VERSION).map_err(|e| e.to_string())?;
-    progress(format!("托管运行时已就绪：{PINNED_DSH_VERSION}"));
+    progress(false, format!("运行时已就绪：{PINNED_DSH_VERSION}"));
     Ok((node, runtime_bin_js()?))
 }
 

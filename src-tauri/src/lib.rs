@@ -5,7 +5,7 @@ mod settings;
 
 use std::sync::Arc;
 
-use app_update::{cmd_check_app_update, cmd_download_app_update};
+use app_update::{cmd_check_app_update, cmd_download_app_update, updates_dir_path};
 use harness::{
     cmd_check_dsh_update, cmd_runtime_info, cmd_update_dsh_runtime, start_harness, HarnessManager,
 };
@@ -52,8 +52,16 @@ fn check_app_update() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-fn download_app_update(url: String) -> Result<serde_json::Value, String> {
-    cmd_download_app_update(url)
+fn download_app_update(
+    app: tauri::AppHandle,
+    url: String,
+) -> Result<serde_json::Value, String> {
+    cmd_download_app_update(&app, url)
+}
+
+#[tauri::command]
+fn get_updates_dir() -> Result<String, String> {
+    updates_dir_path()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -74,7 +82,8 @@ pub fn run() {
             get_npm_settings,
             set_npm_registry,
             check_app_update,
-            download_app_update
+            download_app_update,
+            get_updates_dir
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
