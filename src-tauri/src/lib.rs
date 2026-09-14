@@ -1,11 +1,13 @@
 mod harness;
 mod runtime;
+mod settings;
 
 use std::sync::Arc;
 
 use harness::{
     cmd_check_dsh_update, cmd_runtime_info, cmd_update_dsh_runtime, start_harness, HarnessManager,
 };
+use settings::{cmd_get_npm_settings, cmd_set_npm_registry};
 
 #[tauri::command]
 fn restart_harness(app: tauri::AppHandle, state: tauri::State<'_, Arc<HarnessManager>>) {
@@ -32,6 +34,16 @@ fn runtime_info() -> Result<serde_json::Value, String> {
     cmd_runtime_info()
 }
 
+#[tauri::command]
+fn get_npm_settings() -> Result<serde_json::Value, String> {
+    cmd_get_npm_settings()
+}
+
+#[tauri::command]
+fn set_npm_registry(registry: String) -> Result<serde_json::Value, String> {
+    cmd_set_npm_registry(registry)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let manager = Arc::new(HarnessManager::new());
@@ -46,7 +58,9 @@ pub fn run() {
             harness_url,
             check_dsh_update,
             update_dsh_runtime,
-            runtime_info
+            runtime_info,
+            get_npm_settings,
+            set_npm_registry
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

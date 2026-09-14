@@ -47,7 +47,41 @@
           <button id="retry" class="retry" type="button" hidden>重试</button>
           <button id="update-btn" class="retry secondary" type="button" hidden>更新 dsh 运行时</button>
         </div>
-        <p class="hint">首次会把 @deepseek-ai/dsh 装到 ~/.dsh-desktop/runtime，之后不再走 npx。</p>
+
+        <details class="npm-settings" open>
+          <summary>npm 源设置</summary>
+          <div class="npm-settings-body">
+            <p id="npm-current" class="npm-current">当前：加载中…</p>
+            <div class="npm-presets" role="radiogroup" aria-label="npm 源预设">
+              <label class="npm-preset">
+                <input type="radio" name="npm-preset" value="official" />
+                <span>官方 (npmjs)</span>
+              </label>
+              <label class="npm-preset">
+                <input type="radio" name="npm-preset" value="npmmirror" />
+                <span>淘宝镜像 (npmmirror)</span>
+              </label>
+              <label class="npm-preset">
+                <input type="radio" name="npm-preset" value="custom" />
+                <span>自定义</span>
+              </label>
+            </div>
+            <input
+              id="npm-custom-url"
+              class="npm-custom-url"
+              type="url"
+              placeholder="https://registry.example.com"
+              hidden
+            />
+            <div class="npm-actions">
+              <button id="npm-save" class="retry secondary" type="button">保存</button>
+              <button id="npm-save-retry" class="retry" type="button" hidden>保存并重试</button>
+            </div>
+            <p id="npm-status" class="npm-status" hidden></p>
+          </div>
+        </details>
+
+        <p class="hint">运行时缓存在 ~/.dsh-desktop/runtime；可用下方配置 npm 源。</p>
       </div>
     </main>
   </body>

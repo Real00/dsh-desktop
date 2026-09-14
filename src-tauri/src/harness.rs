@@ -177,6 +177,7 @@ fn run_command(program: &str, args: &[String]) -> Result<(), String> {
     if let Ok(path) = std::env::var("PATH") {
         command.env("PATH", path);
     }
+    crate::settings::apply_npm_registry_env(&mut command);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -256,10 +257,11 @@ fn ensure_default_plugins(app: &AppHandle, node: &str, bin_js: &PathBuf) {
                 );
             }
             Err(e) => {
+                let hint = "可在启动页配置 npm 源（如 https://registry.npmmirror.com）";
                 emit(
                     app,
                     HarnessEvent::Installing {
-                        message: format!("{} 安装失败（将继续）：{e}", plugin.id),
+                        message: format!("{} 安装失败（将继续）：{e}\n{hint}", plugin.id),
                     },
                 );
             }
@@ -431,6 +433,7 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
             }
         };
 
+        let _ = crate::settings::apply_npm_registry_files();
         ensure_default_plugins(&app, &node, &bin_js);
 
         // Non-blocking update hint

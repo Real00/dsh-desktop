@@ -157,10 +157,13 @@ where
     }
 
     let npm = find_npm()?;
+    let _ = crate::settings::apply_npm_registry_files();
     let spec = format!("{DSH_PACKAGE}@{PINNED_DSH_VERSION}");
-    let output = Command::new(&npm)
-        .args(["install", "--no-fund", "--no-audit", &spec])
-        .current_dir(&dir)
+    let mut cmd = Command::new(&npm);
+    cmd.args(["install", "--no-fund", "--no-audit", &spec])
+        .current_dir(&dir);
+    crate::settings::apply_npm_registry_env(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("npm install failed to start: {e}"))?;
 
@@ -191,11 +194,14 @@ pub fn update_managed_runtime(version: Option<&str>) -> Result<String, String> {
     let npm = find_npm()?;
     let dir = runtime_dir()?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let _ = crate::settings::apply_npm_registry_files();
     let ver = version.unwrap_or("latest");
     let spec = format!("{DSH_PACKAGE}@{ver}");
-    let output = Command::new(&npm)
-        .args(["install", "--no-fund", "--no-audit", &spec])
-        .current_dir(&dir)
+    let mut cmd = Command::new(&npm);
+    cmd.args(["install", "--no-fund", "--no-audit", &spec])
+        .current_dir(&dir);
+    crate::settings::apply_npm_registry_env(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
@@ -233,8 +239,11 @@ pub fn update_managed_runtime(version: Option<&str>) -> Result<String, String> {
 pub fn latest_npm_version() -> Result<String, String> {
     ensure_path_for_gui();
     let npm = find_npm()?;
-    let output = Command::new(&npm)
-        .args(["view", DSH_PACKAGE, "version"])
+    let _ = crate::settings::apply_npm_registry_files();
+    let mut cmd = Command::new(&npm);
+    cmd.args(["view", DSH_PACKAGE, "version"]);
+    crate::settings::apply_npm_registry_env(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {

@@ -129,3 +129,109 @@ body {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.25);
 }
+
+.npm-settings {
+  margin-top: 18px;
+  text-align: left;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0 12px 12px;
+}
+
+.npm-settings > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 12px 4px 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #c5d4f0;
+  user-select: none;
+}
+
+.npm-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.npm-settings > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: #6ea8ff;
+}
+
+.npm-settings[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.npm-settings-body {
+  padding: 0 4px 4px;
+}
+
+.npm-current {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  color: #8fa3c7;
+  word-break: break-all;
+}
+
+.npm-presets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.npm-preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #d7e3ff;
+  cursor: pointer;
+}
+
+.npm-preset input {
+  accent-color: #6ea8ff;
+}
+
+.npm-custom-url {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.25);
+  color: #e8eefc;
+  font-size: 0.85rem;
+}
+
+.npm-custom-url:focus {
+  outline: 1px solid #6ea8ff;
+}
+
+.npm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+
+.npm-actions .retry {
+  margin-top: 0;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+.npm-status {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: #9ec5ff;
+}
+
+.npm-status.error {
+  color: #ffb4b4;
+}
+
+.shell.error .npm-settings {
+  border-color: rgba(255, 160, 120, 0.35);
+}
