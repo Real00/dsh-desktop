@@ -6,11 +6,14 @@ type HarnessEvent =
   | { kind: "installing"; message: string }
   | { kind: "starting"; message: string }
   | { kind: "ready"; url: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  | { kind: "update_available"; current: string; latest: string };
 
 const statusEl = () => document.querySelector<HTMLElement>("#status");
 const detailEl = () => document.querySelector<HTMLElement>("#detail");
 const retryEl = () => document.querySelector<HTMLButtonElement>("#retry");
+const updateEl = () => document.querySelector<HTMLElement>("#update");
+const updateBtn = () => document.querySelector<HTMLButtonElement>("#update-btn");
 const shellEl = () => document.querySelector<HTMLElement>(".shell");
 
 function setStatus(message: string) {
@@ -47,9 +50,36 @@ async function restart() {
   await invoke("restart_harness");
 }
 
+async function doUpdateRuntime() {
+  const btn = updateBtn();
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "更新中…";
+  }
+  setStatus("正在更新本地 dsh 运行时…");
+  try {
+    const result = await invoke<{ installed: string }>("update_dsh_runtime");
+    setStatus(`运行时已更新到 ${result.installed}，正在重启…`);
+    const u = updateEl();
+    if (u) u.hidden = true;
+    if (btn) btn.hidden = true;
+    await invoke("restart_harness");
+  } catch (e) {
+    showError(String(e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "更新 dsh 运行时";
+    }
+  }
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   retryEl()?.addEventListener("click", () => {
     void restart();
+  });
+  updateBtn()?.addEventListener("click", () => {
+    void doUpdateRuntime();
   });
 
   await listen<HarnessEvent>("harness", (event) => {
@@ -67,6 +97,16 @@ window.addEventListener("DOMContentLoaded", async () => {
       case "error":
         showError(payload.message);
         break;
+      case "update_available": {
+        const u = updateEl();
+        if (u) {
+          u.hidden = false;
+          u.textContent = `发现新版 dsh：${payload.current} → ${payload.latest}`;
+        }
+        const btn = updateBtn();
+        if (btn) btn.hidden = false;
+        break;
+      }
     }
   });
 });

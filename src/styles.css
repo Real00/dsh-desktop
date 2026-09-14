@@ -110,3 +110,22 @@ body {
   color: #7f91b3;
   font-size: 0.8rem;
 }
+
+.update {
+  margin: 12px 0 0;
+  color: #9ec5ff;
+  font-size: 0.85rem;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.retry.secondary {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+}

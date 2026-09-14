@@ -1,3 +1,5 @@
+ 
+
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -9,16 +11,17 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-const DEFAULT_PACKAGE: &str = "@deepseek-ai/dsh";
+use crate::runtime::{
+    check_dsh_update, ensure_managed_runtime, ensure_path_for_gui, update_managed_runtime,
+};
+
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const PLUGIN_INSTALL_TIMEOUT: Duration = Duration::from_secs(240);
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
 
 struct DefaultPlugin {
     id: &'static str,
-    /// Passed to `dsh plugin --profile web add <spec>`
     install_spec: &'static str,
-    /// Strings that indicate the plugin is already present in package.json / marker.
     detect_needles: &'static [&'static str],
 }
 
@@ -48,6 +51,7 @@ pub enum HarnessEvent {
     Starting { message: String },
     Ready { url: String },
     Error { message: String },
+    UpdateAvailable { current: String, latest: String },
 }
 
 pub struct HarnessManager {
@@ -107,11 +111,7 @@ fn web_profile_package_json() -> Option<PathBuf> {
 }
 
 fn bootstrap_marker_path() -> Option<PathBuf> {
-    Some(
-        home_dir()?
-            .join(".dsh-desktop")
-            .join("bootstrap-plugins.json"),
-    )
+    Some(home_dir()?.join(".dsh-desktop").join("bootstrap-plugins.json"))
 }
 
 fn text_mentions_any(text: &str, needles: &[&str]) -> bool {
@@ -174,101 +174,43 @@ fn find_free_port() -> Result<u16, String> {
     Ok(port)
 }
 
-fn which(bin: &str) -> Option<String> {
-    #[cfg(windows)]
-    let output = Command::new("where").arg(bin).output().ok()?;
-    #[cfg(not(windows))]
-    let output = Command::new("sh")
-        .arg("-lc")
-        .arg(format!("command -v {bin}"))
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()?
-        .trim()
-        .to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(path)
-    }
-}
-
-fn resolve_dsh_cli() -> Result<(String, Vec<String>), String> {
-    if which("dsh").is_some() {
-        return Ok(("dsh".into(), vec![]));
-    }
-
-    let npx = which("npx").ok_or_else(|| {
-        "未找到 Node.js / npx。请先安装 Node.js ≥ 22.19，然后重试。\n\
-         Node.js / npx not found. Install Node.js ≥ 22.19 and retry."
-            .to_string()
-    })?;
-
-    Ok((
-        npx,
-        vec!["--yes".into(), DEFAULT_PACKAGE.into()],
-    ))
-}
-
-fn resolve_launcher() -> Result<(String, Vec<String>), String> {
-    let (program, mut prefix) = resolve_dsh_cli()?;
-    prefix.push("web".into());
-    Ok((program, prefix))
-}
-
 fn run_command(program: &str, args: &[String]) -> Result<(), String> {
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null());
-
     if let Ok(path) = std::env::var("PATH") {
         command.env("PATH", path);
     }
-
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-
     let output = command
         .output()
         .map_err(|e| format!("执行失败 / command failed ({program}): {e}"))?;
-
     if output.status.success() {
         return Ok(());
     }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     Err(format!(
         "命令失败 / command exited {}: {}\n{}",
         output.status,
-        stderr.trim(),
-        stdout.trim()
+        String::from_utf8_lossy(&output.stderr).trim(),
+        String::from_utf8_lossy(&output.stdout).trim()
     ))
 }
 
-fn install_one_plugin(program: &str, prefix: &[String], spec: &str) -> Result<(), String> {
-    let mut args = prefix.to_vec();
-    args.extend([
+fn install_one_plugin(node: &str, bin_js: &PathBuf, spec: &str) -> Result<(), String> {
+    let args = vec![
+        bin_js.to_string_lossy().to_string(),
         "plugin".into(),
         "--profile".into(),
         "web".into(),
         "add".into(),
         spec.into(),
-    ]);
-
-    let program_clone = program.to_string();
-    let args_clone = args.clone();
-    let handle = thread::spawn(move || run_command(&program_clone, &args_clone));
-
+    ];
+    let node = node.to_string();
+    let handle = thread::spawn(move || run_command(&node, &args));
     let started = Instant::now();
     loop {
         if handle.is_finished() {
@@ -279,34 +221,19 @@ fn install_one_plugin(program: &str, prefix: &[String], spec: &str) -> Result<()
         }
         thread::sleep(Duration::from_millis(200));
     }
-
     handle
         .join()
         .map_err(|_| "install thread panicked".to_string())?
 }
 
-fn ensure_default_plugins(app: &AppHandle) {
+fn ensure_default_plugins(app: &AppHandle, node: &str, bin_js: &PathBuf) {
     let missing: Vec<&DefaultPlugin> = DEFAULT_PLUGINS
         .iter()
         .filter(|p| !is_plugin_installed(p))
         .collect();
-
     if missing.is_empty() {
         return;
     }
-
-    let (program, prefix) = match resolve_dsh_cli() {
-        Ok(v) => v,
-        Err(e) => {
-            emit(
-                app,
-                HarnessEvent::Installing {
-                    message: format!("跳过插件安装（{e}）"),
-                },
-            );
-            return;
-        }
-    };
 
     let mut installed_ids: Vec<&str> = DEFAULT_PLUGINS
         .iter()
@@ -321,8 +248,7 @@ fn ensure_default_plugins(app: &AppHandle) {
                 message: format!("正在安装默认插件 {}…", plugin.id),
             },
         );
-
-        match install_one_plugin(&program, &prefix, plugin.install_spec) {
+        match install_one_plugin(node, bin_js, plugin.install_spec) {
             Ok(()) => {
                 installed_ids.push(plugin.id);
                 emit(
@@ -342,18 +268,14 @@ fn ensure_default_plugins(app: &AppHandle) {
             }
         }
     }
-
     let _ = write_bootstrap_marker(&installed_ids);
 }
 
-fn spawn_harness(port: u16) -> Result<Child, String> {
-    let (program, mut args) = resolve_launcher()?;
-    args.push("--port".into());
-    args.push(port.to_string());
-
-    let mut command = Command::new(&program);
+fn spawn_harness(node: &str, bin_js: &PathBuf, port: u16) -> Result<Child, String> {
+    let mut command = Command::new(node);
     command
-        .args(&args)
+        .arg(bin_js)
+        .args(["web", "--port", &port.to_string()])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .stdin(Stdio::null());
@@ -371,7 +293,7 @@ fn spawn_harness(port: u16) -> Result<Child, String> {
 
     command
         .spawn()
-        .map_err(|e| format!("启动 dsh 失败 / failed to spawn dsh ({program}): {e}"))
+        .map_err(|e| format!("启动 dsh 失败 / failed to spawn dsh: {e}"))
 }
 
 fn extract_url(line: &str) -> Option<String> {
@@ -389,26 +311,43 @@ fn extract_url(line: &str) -> Option<String> {
     }
 }
 
-fn http_ready(url: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return false;
-    };
-    let host = parsed.host_str().unwrap_or("127.0.0.1");
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    let addr: SocketAddr = if host == "localhost" || host == "127.0.0.1" {
-        SocketAddr::from(([127, 0, 0, 1], port))
-    } else {
-        match format!("{host}:{port}").parse() {
-            Ok(a) => a,
-            Err(_) => return false,
+/// TCP open is not enough — wait until HTTP responds with a real page body
+/// to avoid navigating into a blank/white webview.
+fn http_page_ready(url: &str) -> bool {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_millis(400))
+        .timeout_read(Duration::from_secs(2))
+        .build();
+    match agent.get(url).call() {
+        Ok(resp) => {
+            let status = resp.status();
+            if !(200..400).contains(&status) {
+                return false;
+            }
+            let body = resp.into_string().unwrap_or_default();
+            // DSH web serves an HTML shell; require non-trivial content.
+            body.len() > 64
+                && (body.contains('<') || body.contains('{') || body.contains("dsh"))
         }
-    };
-    TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+        Err(_) => {
+            // Fallback: port accept
+            let Ok(parsed) = url::Url::parse(url) else {
+                return false;
+            };
+            let host = parsed.host_str().unwrap_or("127.0.0.1");
+            let port = parsed.port_or_known_default().unwrap_or(80);
+            let addr: SocketAddr = if host == "localhost" || host == "127.0.0.1" {
+                SocketAddr::from(([127, 0, 0, 1], port))
+            } else {
+                return false;
+            };
+            TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+        }
+    }
 }
 
 fn drain_pipes(child: &mut Child) -> mpsc::Receiver<String> {
     let (tx, rx) = mpsc::channel::<String>();
-
     if let Some(stdout) = child.stdout.take() {
         let tx_out = tx.clone();
         thread::spawn(move || {
@@ -417,7 +356,6 @@ fn drain_pipes(child: &mut Child) -> mpsc::Receiver<String> {
             }
         });
     }
-
     if let Some(stderr) = child.stderr.take() {
         thread::spawn(move || {
             for line in BufReader::new(stderr).lines().flatten() {
@@ -425,7 +363,6 @@ fn drain_pipes(child: &mut Child) -> mpsc::Receiver<String> {
             }
         });
     }
-
     rx
 }
 
@@ -446,7 +383,9 @@ fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<S
         }
 
         let candidate = discovered.clone().unwrap_or_else(|| fallback.clone());
-        if http_ready(&candidate) {
+        if http_page_ready(&candidate) {
+            // Brief settle — UI assets may still be warming.
+            thread::sleep(Duration::from_millis(500));
             return Ok(candidate);
         }
 
@@ -471,15 +410,40 @@ fn navigate_main(app: &AppHandle, url: &str) -> Result<(), String> {
 pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
     thread::spawn(move || {
         manager.stop();
+        ensure_path_for_gui();
 
         emit(
             &app,
             HarnessEvent::Checking {
-                message: "检查 Node.js / dsh…".into(),
+                message: "检查本地托管运行时…".into(),
             },
         );
 
-        ensure_default_plugins(&app);
+        let app_for_progress = app.clone();
+        let (node, bin_js) = match ensure_managed_runtime(move |msg| {
+            emit(
+                &app_for_progress,
+                HarnessEvent::Installing { message: msg },
+            );
+        }) {
+            Ok(v) => v,
+            Err(e) => {
+                emit(&app, HarnessEvent::Error { message: e });
+                return;
+            }
+        };
+
+        ensure_default_plugins(&app, &node, &bin_js);
+
+        // Non-blocking update hint
+        if let Ok((current, latest, available)) = check_dsh_update() {
+            if available && current != latest {
+                emit(
+                    &app,
+                    HarnessEvent::UpdateAvailable { current, latest },
+                );
+            }
+        }
 
         let port = match find_free_port() {
             Ok(p) => p,
@@ -497,11 +461,11 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
         emit(
             &app,
             HarnessEvent::Starting {
-                message: format!("正在启动 DeepSeek Harness（端口 {port}）…"),
+                message: format!("正在启动本地 dsh（端口 {port}）…"),
             },
         );
 
-        let mut child = match spawn_harness(port) {
+        let mut child = match spawn_harness(&node, &bin_js, port) {
             Ok(c) => c,
             Err(e) => {
                 emit(&app, HarnessEvent::Error { message: e });
@@ -538,4 +502,29 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
             );
         }
     });
+}
+
+pub fn cmd_check_dsh_update() -> Result<serde_json::Value, String> {
+    let (current, latest, update_available) = check_dsh_update()?;
+    Ok(serde_json::json!({
+        "current": current,
+        "latest": latest,
+        "updateAvailable": update_available,
+    }))
+}
+
+pub fn cmd_update_dsh_runtime() -> Result<serde_json::Value, String> {
+    let installed = update_managed_runtime(Some("latest"))?;
+    Ok(serde_json::json!({
+        "installed": installed,
+    }))
+}
+
+pub fn cmd_runtime_info() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "runtimeDir": crate::runtime::runtime_dir()?.to_string_lossy(),
+        "version": crate::runtime::read_installed_version(),
+        "bin": crate::runtime::runtime_bin_js()?.to_string_lossy(),
+        "ready": crate::runtime::runtime_bin_js().map(|p| p.is_file()).unwrap_or(false),
+    }))
 }

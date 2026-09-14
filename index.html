@@ -11,12 +11,16 @@
     <main class="shell">
       <div class="card">
         <div class="brand">DSH Desktop</div>
-        <p class="subtitle">DeepSeek Harness · 开箱即用桌面壳</p>
+        <p class="subtitle">DeepSeek Harness · 本地托管运行时</p>
         <div class="spinner" aria-hidden="true"></div>
         <p id="status" class="status">正在启动…</p>
         <pre id="detail" class="detail" hidden></pre>
-        <button id="retry" class="retry" type="button" hidden>重试</button>
-        <p class="hint">首次启动会通过 npx 拉取 @deepseek-ai/dsh，可能需要一会儿。</p>
+        <p id="update" class="update" hidden></p>
+        <div class="actions">
+          <button id="retry" class="retry" type="button" hidden>重试</button>
+          <button id="update-btn" class="retry secondary" type="button" hidden>更新 dsh 运行时</button>
+        </div>
+        <p class="hint">首次会把 @deepseek-ai/dsh 装到 ~/.dsh-desktop/runtime，之后不再走 npx。</p>
       </div>
     </main>
   </body>

@@ -18,6 +18,24 @@
 - [Node.js](https://nodejs.org/) **≥ 22.19**（运行时用来拉起 `@deepseek-ai/dsh`）
 - 开发还需要：Rust stable、系统 WebView 依赖（见 [Tauri prerequisites](https://tauri.app/start/prerequisites/)）
 
+
+## 本地托管运行时（不再每次 npx）
+
+应用把 `@deepseek-ai/dsh` 安装到：
+
+```text
+~/.dsh-desktop/runtime/
+```
+
+- **首次启动**：`npm install @deepseek-ai/dsh@<pinned>` 到该目录（只需一次）
+- **之后启动**：直接 `node …/node_modules/@deepseek-ai/dsh/lib/bin.js web`，**不再走 npx**
+- **更新**：启动页提示新版本，或调用「更新 dsh 运行时」（等价于在该目录 `npm install @deepseek-ai/dsh@latest`）
+
+> 安装包体积仍保持精简：不把整份 Node/`node_modules` 打进 `.dmg`（那会非常大且难签名）。  
+> 运行时缓存在用户目录，跨应用升级保留；需要的话可在后续版本增加「从 Release 预置 runtime 缓存」加速首次安装。
+
+就绪检测会等到 **HTTP 返回真实页面内容** 再导航进 Web UI，减轻白屏。
+
 ## 本地开发
 
 ```bash
@@ -49,7 +67,7 @@ npm run tauri build
 
 触发方式：
 
-- 推送标签：`git tag v0.1.2 && git push origin v0.1.2`
+- 推送标签：`git tag v0.1.3 && git push origin v0.1.3`
 - 或在 Actions 里手动 `workflow_dispatch`
 
 产物通过 `tauri-apps/tauri-action` 发到 **Draft Release**（Windows `.exe` / NSIS，macOS arm64 `.dmg`）。
