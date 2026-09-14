@@ -2,18 +2,45 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DSH Desktop</title>
+    <style>
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        background: #0b1020;
+        color: #e8eefc;
+        font-family: "SF Pro Text", "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+          "Microsoft YaHei", sans-serif;
+      }
+      .boot {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+      }
+      .boot-card {
+        width: min(440px, 100%);
+        padding: 32px 28px 24px;
+        border-radius: 20px;
+        background: rgba(16, 22, 40, 0.88);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        text-align: center;
+      }
+      .boot-brand { font-size: 1.6rem; font-weight: 700; }
+      .boot-sub { margin: 6px 0 18px; color: #9db0d4; }
+      .boot-status { margin: 0; color: #d7e3ff; }
+    </style>
+    <link rel="stylesheet" href="/src/styles.css" />
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <main class="shell">
-      <div class="card">
-        <div class="brand">DSH Desktop</div>
-        <p class="subtitle">DeepSeek Harness · 本地托管运行时</p>
+    <main class="shell boot">
+      <div class="card boot-card">
+        <div class="brand boot-brand">DSH Desktop</div>
+        <p class="subtitle boot-sub">DeepSeek Harness · 本地托管运行时</p>
         <div class="spinner" aria-hidden="true"></div>
-        <p id="status" class="status">正在启动…</p>
+        <p id="status" class="status boot-status">正在启动…</p>
         <pre id="detail" class="detail" hidden></pre>
         <p id="update" class="update" hidden></p>
         <div class="actions">
