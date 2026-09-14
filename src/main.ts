@@ -75,9 +75,6 @@ async function doUpdateRuntime() {
 }
 
 
-function embedDsh(_url: string) {
-  // Rust opens a dedicated webview on the token URL (first-party cookies).
-}
 
 
 async function pollExistingUrl() {
