@@ -76,21 +76,9 @@ async function doUpdateRuntime() {
 
 
 function embedDsh(url: string) {
-  const existing = document.getElementById("dsh-frame");
-  if (existing) {
-    (existing as HTMLIFrameElement).src = url;
-    return;
-  }
-  const frame = document.createElement("iframe");
-  frame.id = "dsh-frame";
-  frame.title = "DeepSeek Harness";
-  frame.src = url;
-  frame.setAttribute(
-    "style",
-    "position:fixed;inset:0;width:100%;height:100%;border:0;background:#0b1020;z-index:1000;",
-  );
-  frame.allow = "clipboard-read; clipboard-write; fullscreen";
-  document.body.appendChild(frame);
+  // Top-level navigation so the token 303 Set-Cookie is first-party.
+  // iframe embedding is treated as third-party and shows auth required.
+  window.location.replace(url);
 }
 
 
