@@ -74,6 +74,25 @@ async function doUpdateRuntime() {
   }
 }
 
+
+function embedDsh(url: string) {
+  const existing = document.getElementById("dsh-frame");
+  if (existing) {
+    (existing as HTMLIFrameElement).src = url;
+    return;
+  }
+  const frame = document.createElement("iframe");
+  frame.id = "dsh-frame";
+  frame.title = "DeepSeek Harness";
+  frame.src = url;
+  frame.setAttribute(
+    "style",
+    "position:fixed;inset:0;width:100%;height:100%;border:0;background:#0b1020;z-index:1000;",
+  );
+  frame.allow = "clipboard-read; clipboard-write; fullscreen";
+  document.body.appendChild(frame);
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   retryEl()?.addEventListener("click", () => {
     void restart();
@@ -93,11 +112,9 @@ window.addEventListener("DOMContentLoaded", async () => {
         break;
       case "ready":
         setStatus(`已就绪，正在打开 ${payload.url}`);
-        // Prefer in-webview navigation; Rust window.navigate was closing the
-        // macOS window in packaged builds.
-        window.setTimeout(() => {
-          window.location.href = payload.url;
-        }, 50);
+        // Keep the Tauri window origin; full document navigation to localhost
+        // was leaving a running process with zero windows on macOS.
+        embedDsh(payload.url);
         break;
       case "error":
         showError(payload.message);
