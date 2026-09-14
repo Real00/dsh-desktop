@@ -48,6 +48,15 @@
           <button id="update-btn" class="retry secondary" type="button" hidden>更新 dsh 运行时</button>
         </div>
 
+        <div id="app-update-banner" class="app-update-banner" hidden>
+          <p id="app-update-text" class="app-update-text"></p>
+          <div class="app-update-actions">
+            <button id="app-update-download" class="retry" type="button">下载更新</button>
+            <button id="app-update-later" class="retry secondary" type="button">稍后再说</button>
+          </div>
+          <p id="app-update-progress" class="app-update-progress" hidden></p>
+        </div>
+
         <details class="npm-settings" open>
           <summary>npm 源设置</summary>
           <div class="npm-settings-body">
@@ -76,6 +85,7 @@
             <div class="npm-actions">
               <button id="npm-save" class="retry secondary" type="button">保存</button>
               <button id="npm-save-retry" class="retry" type="button" hidden>保存并重试</button>
+              <button id="check-app-update-btn" class="retry secondary" type="button">检查应用更新</button>
             </div>
             <p id="npm-status" class="npm-status" hidden></p>
           </div>

@@ -1,9 +1,11 @@
+mod app_update;
 mod harness;
 mod runtime;
 mod settings;
 
 use std::sync::Arc;
 
+use app_update::{cmd_check_app_update, cmd_download_app_update};
 use harness::{
     cmd_check_dsh_update, cmd_runtime_info, cmd_update_dsh_runtime, start_harness, HarnessManager,
 };
@@ -44,6 +46,16 @@ fn set_npm_registry(registry: String) -> Result<serde_json::Value, String> {
     cmd_set_npm_registry(registry)
 }
 
+#[tauri::command]
+fn check_app_update() -> Result<serde_json::Value, String> {
+    cmd_check_app_update()
+}
+
+#[tauri::command]
+fn download_app_update(url: String) -> Result<serde_json::Value, String> {
+    cmd_download_app_update(url)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let manager = Arc::new(HarnessManager::new());
@@ -60,7 +72,9 @@ pub fn run() {
             update_dsh_runtime,
             runtime_info,
             get_npm_settings,
-            set_npm_registry
+            set_npm_registry,
+            check_app_update,
+            download_app_update
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

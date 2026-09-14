@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { openPath } from "@tauri-apps/plugin-opener";
 
 type HarnessEvent =
   | { kind: "checking"; message: string }
@@ -11,6 +12,15 @@ type HarnessEvent =
 
 type NpmPreset = { id: string; label: string; url: string };
 type NpmSettings = { registry: string; presets: NpmPreset[] };
+
+type AppUpdateInfo = {
+  updateAvailable: boolean;
+  current: string;
+  latest: string;
+  notes: string;
+  downloadUrl: string | null;
+  assetName: string | null;
+};
 
 const OFFICIAL = "https://registry.npmjs.org";
 const NPMMIRROR = "https://registry.npmmirror.com";
@@ -28,8 +38,21 @@ const npmStatusEl = () => document.querySelector<HTMLElement>("#npm-status");
 const npmSaveEl = () => document.querySelector<HTMLButtonElement>("#npm-save");
 const npmSaveRetryEl = () =>
   document.querySelector<HTMLButtonElement>("#npm-save-retry");
+const appUpdateBannerEl = () =>
+  document.querySelector<HTMLElement>("#app-update-banner");
+const appUpdateTextEl = () =>
+  document.querySelector<HTMLElement>("#app-update-text");
+const appUpdateDownloadEl = () =>
+  document.querySelector<HTMLButtonElement>("#app-update-download");
+const appUpdateLaterEl = () =>
+  document.querySelector<HTMLButtonElement>("#app-update-later");
+const appUpdateProgressEl = () =>
+  document.querySelector<HTMLElement>("#app-update-progress");
+const checkAppUpdateBtnEl = () =>
+  document.querySelector<HTMLButtonElement>("#check-app-update-btn");
 
 let inErrorState = false;
+let pendingAppUpdate: AppUpdateInfo | null = null;
 
 function setStatus(message: string) {
   const el = statusEl();
@@ -93,6 +116,37 @@ function setNpmStatus(message: string, isError = false) {
   el.hidden = !message;
   el.textContent = message;
   el.classList.toggle("error", isError);
+}
+
+function setAppUpdateProgress(message: string, isError = false) {
+  const el = appUpdateProgressEl();
+  if (!el) return;
+  el.hidden = !message;
+  el.textContent = message;
+  el.classList.toggle("error", isError);
+}
+
+function hideAppUpdateBanner() {
+  const banner = appUpdateBannerEl();
+  if (banner) banner.hidden = true;
+  pendingAppUpdate = null;
+  setAppUpdateProgress("");
+}
+
+function showAppUpdateBanner(info: AppUpdateInfo) {
+  pendingAppUpdate = info;
+  const banner = appUpdateBannerEl();
+  const text = appUpdateTextEl();
+  if (banner) banner.hidden = false;
+  if (text) {
+    text.textContent = `发现应用新版本 ${info.current} → ${info.latest}`;
+  }
+  const dl = appUpdateDownloadEl();
+  if (dl) {
+    dl.disabled = !info.downloadUrl;
+    dl.textContent = "下载更新";
+  }
+  setAppUpdateProgress("");
 }
 
 function applySettingsToUi(settings: NpmSettings) {
@@ -202,6 +256,67 @@ async function pollExistingUrl() {
   return false;
 }
 
+async function checkAppUpdate(opts?: { announceUpToDate?: boolean }) {
+  const announce = opts?.announceUpToDate ?? false;
+  const btn = checkAppUpdateBtnEl();
+  if (btn) btn.disabled = true;
+  try {
+    const info = await invoke<AppUpdateInfo>("check_app_update");
+    if (info.updateAvailable) {
+      showAppUpdateBanner(info);
+      if (announce) {
+        setNpmStatus(`发现应用新版本 ${info.current} → ${info.latest}`);
+      }
+    } else {
+      hideAppUpdateBanner();
+      if (announce) {
+        setNpmStatus(`已是最新应用版本（${info.current}）`);
+      }
+    }
+  } catch (e) {
+    if (announce) {
+      setNpmStatus(`检查应用更新失败：${e}`, true);
+    }
+    // Silent on auto-check so splash boot is not blocked by network errors.
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function downloadAppUpdate() {
+  const info = pendingAppUpdate;
+  if (!info?.downloadUrl) {
+    setAppUpdateProgress("当前平台没有可用的安装包", true);
+    return;
+  }
+  const dl = appUpdateDownloadEl();
+  const later = appUpdateLaterEl();
+  if (dl) {
+    dl.disabled = true;
+    dl.textContent = "下载中…";
+  }
+  if (later) later.disabled = true;
+  setAppUpdateProgress(
+    `正在下载 ${info.assetName || "安装包"}…（保存到 ~/.dsh-desktop/updates/）`,
+  );
+  try {
+    const result = await invoke<{ path: string }>("download_app_update", {
+      url: info.downloadUrl,
+    });
+    setAppUpdateProgress(`下载完成：${result.path}，正在打开…`);
+    await openPath(result.path);
+    setAppUpdateProgress(`已打开安装包：${result.path}`);
+  } catch (e) {
+    setAppUpdateProgress(`下载或打开失败：${e}`, true);
+  } finally {
+    if (dl) {
+      dl.disabled = false;
+      dl.textContent = "下载更新";
+    }
+    if (later) later.disabled = false;
+  }
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   retryEl()?.addEventListener("click", () => {
     void restart();
@@ -222,8 +337,20 @@ window.addEventListener("DOMContentLoaded", async () => {
   npmSaveRetryEl()?.addEventListener("click", () => {
     void saveNpmRegistry(true);
   });
+  checkAppUpdateBtnEl()?.addEventListener("click", () => {
+    void checkAppUpdate({ announceUpToDate: true });
+  });
+  appUpdateDownloadEl()?.addEventListener("click", () => {
+    void downloadAppUpdate();
+  });
+  appUpdateLaterEl()?.addEventListener("click", () => {
+    hideAppUpdateBanner();
+  });
 
   await loadNpmSettings();
+
+  // Non-blocking app update check (do not await).
+  void checkAppUpdate();
 
   // If Ready fired before the splash listener attached, recover via poll.
   if (!(await pollExistingUrl())) {

@@ -42,8 +42,8 @@ jobs:
 
             First-run notes:
             - Requires Node.js ≥ 22.19 on the machine (used to launch `@deepseek-ai/dsh`).
-            - Default plugins on first launch: dshmarket, dsh-modellix, loopx.
+            - Default plugins on first launch: dshmarket, loopx.
             - Unsigned builds may need right-click → Open on Gatekeeper.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --target aarch64-apple-darwin --bundles dmg,app
