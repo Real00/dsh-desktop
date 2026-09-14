@@ -1,6 +1,6 @@
 [package]
 name = "dsh-desktop"
-version = "0.1.8"
+version = "0.1.9"
 description = "Out-of-the-box Tauri desktop shell for DeepSeek Harness (dsh)"
 authors = ["wangjunrui"]
 edition = "2021"

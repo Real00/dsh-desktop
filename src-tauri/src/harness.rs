@@ -311,9 +311,12 @@ fn extract_url(line: &str) -> Option<String> {
 /// TCP open is not enough — wait until HTTP responds with a real page body
 /// to avoid navigating into a blank/white webview.
 fn http_page_ready(url: &str) -> bool {
+    // Do not follow redirects: the token URL answers 303, and following it
+    // drops the token and yields a bare 401 that never looks "ready".
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_millis(400))
         .timeout_read(Duration::from_secs(2))
+        .redirects(0)
         .build();
     match agent.get(url).call() {
         Ok(resp) => {

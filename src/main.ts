@@ -93,6 +93,21 @@ function embedDsh(url: string) {
   document.body.appendChild(frame);
 }
 
+
+async function pollExistingUrl() {
+  try {
+    const url = await invoke<string | null>("harness_url");
+    if (url) {
+      setStatus(`已就绪，正在打开 ${url}`);
+      embedDsh(url);
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   retryEl()?.addEventListener("click", () => {
     void restart();
@@ -100,6 +115,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   updateBtn()?.addEventListener("click", () => {
     void doUpdateRuntime();
   });
+
+  // If Ready fired before the splash listener attached, recover via poll.
+  if (!(await pollExistingUrl())) {
+    const timer = window.setInterval(() => {
+      void pollExistingUrl().then((ok) => {
+        if (ok) window.clearInterval(timer);
+      });
+    }, 500);
+    window.setTimeout(() => window.clearInterval(timer), 120000);
+  }
 
   await listen<HarnessEvent>("harness", (event) => {
     const payload = event.payload;
