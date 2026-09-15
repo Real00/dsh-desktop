@@ -38,6 +38,11 @@ const DEFAULT_PLUGINS: &[DefaultPlugin] = &[
         install_spec: "github:huangruiteng/loopx",
         detect_needles: &["loopx", "dsh-loopx", "dsh-loopx-plugin"],
     },
+    DefaultPlugin {
+        id: "dsh-chat-import",
+        install_spec: "dsh-chat-import",
+        detect_needles: &["dsh-chat-import"],
+    },
 ];
 
 #[derive(Debug, Clone, Serialize)]
