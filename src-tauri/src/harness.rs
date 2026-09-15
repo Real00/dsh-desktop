@@ -383,16 +383,15 @@ fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<S
         // probing it consumes auth before the webview can open it.
         if let Some(candidate) = discovered.clone() {
             if candidate.contains("token=") {
-                thread::sleep(Duration::from_millis(300));
+                // Brief settle only — do not HTTP-probe (one-time token).
+                thread::sleep(Duration::from_millis(100));
                 return Ok(candidate);
             }
             if http_page_ready(&candidate) {
-                thread::sleep(Duration::from_millis(500));
                 return Ok(candidate);
             }
         } else if http_page_ready(&fallback) {
             // Rare: server serves UI without token.
-            thread::sleep(Duration::from_millis(500));
             return Ok(fallback.clone());
         }
 
@@ -440,18 +439,11 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
             }
         };
 
+        // Local .npmrc writes only — cheap; leave on path so plugin install / npm
+        // child processes see the user's chosen registry.
         let _ = crate::settings::apply_npm_registry_files();
+        // Skips plugins already present in web profile package.json or bootstrap marker.
         ensure_default_plugins(&app, &node, &bin_js);
-
-        // Non-blocking update hint
-        if let Ok((current, latest, available)) = check_dsh_update() {
-            if available && current != latest {
-                emit(
-                    &app,
-                    HarnessEvent::UpdateAvailable { current, latest },
-                );
-            }
-        }
 
         let port = match find_free_port() {
             Ok(p) => p,
@@ -480,6 +472,20 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
                 return;
             }
         };
+
+        // npm view hits the registry with no timeout — never block spawn/UI on it.
+        // Run after spawn so the splash can still show UpdateAvailable while waiting.
+        let app_for_update = app.clone();
+        thread::spawn(move || {
+            if let Ok((current, latest, available)) = check_dsh_update() {
+                if available && current != latest {
+                    emit(
+                        &app_for_update,
+                        HarnessEvent::UpdateAvailable { current, latest },
+                    );
+                }
+            }
+        });
 
         let deadline = Instant::now() + READY_TIMEOUT;
         let url = match wait_until_ready(&mut child, port, deadline) {

@@ -627,21 +627,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     void openUpdatesFolder();
   });
 
-  await loadNpmSettings();
-
-  // Non-blocking app update check (do not await).
-  void checkAppUpdate();
-
-  // If Ready fired before the splash listener attached, recover via poll.
-  if (!(await pollExistingUrl())) {
-    const timer = window.setInterval(() => {
-      void pollExistingUrl().then((ok) => {
-        if (ok) window.clearInterval(timer);
-      });
-    }, 500);
-    window.setTimeout(() => window.clearInterval(timer), 120000);
-  }
-
+  // Attach harness listeners before any awaited I/O so Checking/Starting/Ready
+  // are not missed while npm settings load.
   await listen<HarnessEvent>("harness", (event) => {
     handleHarnessEvent(event.payload);
   });
@@ -653,9 +640,22 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Keep save-and-retry visible if we were already in error when settings loaded.
-  if (inErrorState) {
-    const saveRetry = npmSaveRetryEl();
-    if (saveRetry) saveRetry.hidden = false;
+  // Settings + app update are off the harness-event critical path.
+  void loadNpmSettings().then(() => {
+    if (inErrorState) {
+      const saveRetry = npmSaveRetryEl();
+      if (saveRetry) saveRetry.hidden = false;
+    }
+  });
+  void checkAppUpdate();
+
+  // If Ready fired before the splash listener attached, recover via poll.
+  if (!(await pollExistingUrl())) {
+    const timer = window.setInterval(() => {
+      void pollExistingUrl().then((ok) => {
+        if (ok) window.clearInterval(timer);
+      });
+    }, 500);
+    window.setTimeout(() => window.clearInterval(timer), 120000);
   }
 });
