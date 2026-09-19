@@ -2,16 +2,45 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openPath } from "@tauri-apps/plugin-opener";
 
+type PluginInfo = {
+  id: string;
+  label: string;
+  description: string;
+  installSpec: string;
+  recommended?: boolean;
+};
+
 type HarnessEvent =
   | { kind: "checking"; message: string }
   | { kind: "installing"; message: string }
   | { kind: "starting"; message: string }
   | { kind: "ready"; url: string }
   | { kind: "error"; message: string }
-  | { kind: "update_available"; current: string; latest: string };
+  | { kind: "update_available"; current: string; latest: string }
+  | { kind: "needs_wizard"; plugins: PluginInfo[]; message: string }
+  | { kind: "crashed"; message: string; attempt: number; will_retry: boolean }
+  | { kind: "restarting"; message: string; attempt: number };
 
 type NpmPreset = { id: string; label: string; url: string };
 type NpmSettings = { registry: string; presets: NpmPreset[] };
+
+type DesktopSettings = {
+  wizardCompleted: boolean;
+  selectedPlugins: string[];
+  autostart: boolean;
+  globalShortcut: string;
+  globalShortcutEnabled: boolean;
+  cliShimEnabled: boolean;
+  defaultShortcut: string;
+};
+
+type ShimStatus = {
+  path: string;
+  installed: boolean;
+  enabled: boolean;
+  hint: string;
+  platform: string;
+};
 
 type AppUpdateInfo = {
   updateAvailable: boolean;
@@ -68,6 +97,12 @@ const appUpdateBarEl = () =>
   document.querySelector<HTMLElement>("#app-update-bar");
 const checkAppUpdateBtnEl = () =>
   document.querySelector<HTMLButtonElement>("#check-app-update-btn");
+const pluginWizardEl = () =>
+  document.querySelector<HTMLElement>("#plugin-wizard");
+const wizardPluginsEl = () =>
+  document.querySelector<HTMLElement>("#wizard-plugins");
+const wizardStatusEl = () =>
+  document.querySelector<HTMLElement>("#wizard-status");
 
 let inErrorState = false;
 let lastErrorText = "";
@@ -411,8 +446,180 @@ async function saveNpmRegistry(andRetry: boolean) {
   }
 }
 
+function hideWizard() {
+  const wiz = pluginWizardEl();
+  if (wiz) wiz.hidden = true;
+  shellEl()?.classList.remove("wizard-open");
+}
+
+function showWizard(plugins: PluginInfo[], message: string, selected?: string[]) {
+  const wiz = pluginWizardEl();
+  const list = wizardPluginsEl();
+  if (!wiz || !list) return;
+  shellEl()?.classList.add("wizard-open");
+  wiz.hidden = false;
+  setStatus(message || "请选择要安装的插件");
+  const selectedSet = new Set(
+    selected && selected.length > 0 ? selected : plugins.map((p) => p.id),
+  );
+  list.innerHTML = "";
+  for (const p of plugins) {
+    const label = document.createElement("label");
+    label.className = "wizard-plugin";
+    const checked = selectedSet.has(p.id);
+    label.innerHTML = `
+      <input type="checkbox" data-plugin-id="${p.id}" ${checked ? "checked" : ""} />
+      <span>
+        <strong>${p.label}</strong> <code>${p.id}</code>
+        <small>${p.description}</small>
+      </span>
+    `;
+    list.appendChild(label);
+  }
+  const st = wizardStatusEl();
+  if (st) {
+    st.hidden = true;
+    st.textContent = "";
+  }
+}
+
+function collectWizardSelection(): string[] {
+  const boxes = document.querySelectorAll<HTMLInputElement>(
+    '#wizard-plugins input[type="checkbox"]',
+  );
+  const ids: string[] = [];
+  boxes.forEach((b) => {
+    if (b.checked && b.dataset.pluginId) ids.push(b.dataset.pluginId);
+  });
+  return ids;
+}
+
+async function finishWizard(opts: { useRecommended: boolean; skip: boolean }) {
+  const st = wizardStatusEl();
+  if (st) {
+    st.hidden = false;
+    st.textContent = "正在保存…";
+    st.classList.remove("error");
+  }
+  try {
+    const selected = opts.skip ? [] : collectWizardSelection();
+    await invoke("complete_plugin_wizard", {
+      selected,
+      useRecommended: opts.useRecommended,
+    });
+    hideWizard();
+    setStatus(opts.skip ? "已跳过插件安装，正在启动…" : "正在安装所选插件并启动…");
+  } catch (e) {
+    if (st) {
+      st.textContent = `保存失败：${e}`;
+      st.classList.add("error");
+    }
+  }
+}
+
+async function reopenWizard() {
+  try {
+    const catalog = await invoke<{ plugins: PluginInfo[] }>("get_plugin_catalog");
+    const desk = await invoke<DesktopSettings>("get_desktop_settings");
+    showWizard(
+      catalog.plugins,
+      "选择要安装的推荐插件（可跳过）",
+      desk.selectedPlugins,
+    );
+    await invoke("open_plugin_wizard");
+  } catch (e) {
+    setNpmStatus(`打开向导失败：${e}`, true);
+  }
+}
+
+async function loadDesktopSettings() {
+  try {
+    const desk = await invoke<DesktopSettings>("get_desktop_settings");
+    const auto = document.querySelector<HTMLInputElement>("#autostart-toggle");
+    if (auto) {
+      try {
+        const live = await invoke<boolean>("get_autostart_enabled");
+        auto.checked = live;
+      } catch {
+        auto.checked = desk.autostart;
+      }
+    }
+    const en = document.querySelector<HTMLInputElement>("#shortcut-enabled");
+    if (en) en.checked = desk.globalShortcutEnabled;
+    const input = document.querySelector<HTMLInputElement>("#shortcut-input");
+    if (input) {
+      input.value = desk.globalShortcut || desk.defaultShortcut;
+    }
+  } catch (e) {
+    setNpmStatus(`读取桌面设置失败：${e}`, true);
+  }
+}
+
+async function loadShimStatus() {
+  try {
+    const status = await invoke<ShimStatus>("get_shim_status");
+    const el = document.querySelector<HTMLElement>("#shim-status");
+    if (el) {
+      el.textContent = status.installed
+        ? `已安装：${status.path}`
+        : `未安装（目标：${status.path}）`;
+    }
+    const hint = document.querySelector<HTMLElement>("#shim-hint");
+    if (hint) hint.textContent = status.hint;
+  } catch (e) {
+    const el = document.querySelector<HTMLElement>("#shim-status");
+    if (el) el.textContent = `读取 shim 状态失败：${e}`;
+  }
+}
+
+async function saveAutostart() {
+  const auto = document.querySelector<HTMLInputElement>("#autostart-toggle");
+  if (!auto) return;
+  try {
+    await invoke("set_autostart", { enabled: auto.checked });
+    setNpmStatus(auto.checked ? "已开启开机启动" : "已关闭开机启动");
+  } catch (e) {
+    setNpmStatus(`设置开机启动失败：${e}`, true);
+  }
+}
+
+async function saveShortcut() {
+  const en = document.querySelector<HTMLInputElement>("#shortcut-enabled");
+  const input = document.querySelector<HTMLInputElement>("#shortcut-input");
+  try {
+    await invoke("set_global_shortcut", {
+      shortcut: (input?.value || "").trim(),
+      enabled: !!en?.checked,
+    });
+    setNpmStatus("快捷键已保存");
+  } catch (e) {
+    setNpmStatus(`保存快捷键失败：${e}`, true);
+  }
+}
+
+async function installShim() {
+  try {
+    const status = await invoke<ShimStatus>("install_cli_shim");
+    setNpmStatus(`已安装 shim：${status.path}`);
+    await loadShimStatus();
+  } catch (e) {
+    setNpmStatus(`安装 shim 失败：${e}`, true);
+  }
+}
+
+async function removeShim() {
+  try {
+    await invoke("remove_cli_shim");
+    setNpmStatus("已移除 shim");
+    await loadShimStatus();
+  } catch (e) {
+    setNpmStatus(`移除 shim 失败：${e}`, true);
+  }
+}
+
 async function restart() {
   clearError();
+  hideWizard();
   setBootStep("check");
   setStatus("正在重新启动…");
   await invoke("restart_harness");
@@ -480,7 +687,6 @@ async function checkAppUpdate(opts?: { announceUpToDate?: boolean }) {
     if (announce) {
       setNpmStatus(`检查应用更新失败：${e}`, true);
     }
-    // Silent on auto-check so splash boot is not blocked by network errors.
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -542,11 +748,13 @@ function handleHarnessEvent(payload: HarnessEvent) {
   switch (payload.kind) {
     case "checking":
       clearError();
+      hideWizard();
       setStatus(payload.message);
       setBootStep("check");
       break;
     case "installing": {
       clearError();
+      hideWizard();
       setStatus(payload.message);
       const msg = payload.message;
       if (msg.includes("插件")) {
@@ -558,6 +766,7 @@ function handleHarnessEvent(payload: HarnessEvent) {
     }
     case "starting":
       clearError();
+      hideWizard();
       setStatus(payload.message);
       if (payload.message.includes("打开")) {
         setBootStep("open");
@@ -566,11 +775,10 @@ function handleHarnessEvent(payload: HarnessEvent) {
       }
       break;
     case "ready":
+      hideWizard();
       setStatus(`已就绪，正在打开界面…`);
       setBootStep("open");
       completeAllSteps();
-      // Keep the Tauri window origin; full document navigation to localhost
-      // was leaving a running process with zero windows on macOS.
       break;
     case "error":
       showError(payload.message);
@@ -585,6 +793,27 @@ function handleHarnessEvent(payload: HarnessEvent) {
       if (btn) btn.hidden = false;
       break;
     }
+    case "needs_wizard":
+      clearError();
+      showWizard(payload.plugins, payload.message);
+      break;
+    case "crashed":
+      setStatus(
+        payload.will_retry
+          ? `${payload.message}（将自动重启）`
+          : payload.message,
+      );
+      if (!payload.will_retry) {
+        showError(
+          `${payload.message}\n已停止自动重启，请点击「重启 dsh」。`,
+        );
+      }
+      break;
+    case "restarting":
+      clearError();
+      setStatus(payload.message);
+      setBootStep("start");
+      break;
   }
 }
 
@@ -594,6 +823,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   retryEl()?.addEventListener("click", () => {
     void restart();
   });
+  document
+    .querySelector<HTMLButtonElement>("#restart-harness-btn")
+    ?.addEventListener("click", () => {
+      void restart();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#settings-restart-btn")
+    ?.addEventListener("click", () => {
+      void restart();
+    });
   copyErrorEl()?.addEventListener("click", () => {
     void copyError();
   });
@@ -627,8 +866,47 @@ window.addEventListener("DOMContentLoaded", async () => {
     void openUpdatesFolder();
   });
 
-  // Attach harness listeners before any awaited I/O so Checking/Starting/Ready
-  // are not missed while npm settings load.
+  document
+    .querySelector<HTMLButtonElement>("#wizard-install")
+    ?.addEventListener("click", () => {
+      void finishWizard({ useRecommended: false, skip: false });
+    });
+  document
+    .querySelector<HTMLButtonElement>("#wizard-recommended")
+    ?.addEventListener("click", () => {
+      void finishWizard({ useRecommended: true, skip: false });
+    });
+  document
+    .querySelector<HTMLButtonElement>("#wizard-skip")
+    ?.addEventListener("click", () => {
+      void finishWizard({ useRecommended: false, skip: true });
+    });
+  document
+    .querySelector<HTMLButtonElement>("#reopen-wizard-btn")
+    ?.addEventListener("click", () => {
+      void reopenWizard();
+    });
+  document
+    .querySelector<HTMLInputElement>("#autostart-toggle")
+    ?.addEventListener("change", () => {
+      void saveAutostart();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#shortcut-save")
+    ?.addEventListener("click", () => {
+      void saveShortcut();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#shim-install")
+    ?.addEventListener("click", () => {
+      void installShim();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#shim-remove")
+    ?.addEventListener("click", () => {
+      void removeShim();
+    });
+
   await listen<HarnessEvent>("harness", (event) => {
     handleHarnessEvent(event.payload);
   });
@@ -640,16 +918,16 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // Settings + app update are off the harness-event critical path.
   void loadNpmSettings().then(() => {
     if (inErrorState) {
       const saveRetry = npmSaveRetryEl();
       if (saveRetry) saveRetry.hidden = false;
     }
   });
+  void loadDesktopSettings();
+  void loadShimStatus();
   void checkAppUpdate();
 
-  // If Ready fired before the splash listener attached, recover via poll.
   if (!(await pollExistingUrl())) {
     const timer = window.setInterval(() => {
       void pollExistingUrl().then((ok) => {

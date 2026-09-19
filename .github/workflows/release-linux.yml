@@ -1,0 +1,103 @@
+name: Release Linux
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-x64:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux deps (WebKit / AppImage)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri app (Linux x64)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+          releaseName: DSH Desktop ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+          releaseBody: |
+            Linux x86_64 build for DSH Desktop (AppImage + deb).
+
+            First-run notes:
+            - Requires Node.js ≥ 22.19 on the machine (used to launch `@deepseek-ai/dsh`).
+            - First launch shows a plugin wizard (recommended: dshmarket, loopx, dsh-chat-import, dsh-llm-capabilities).
+            - Optional CLI shim writes to ~/.local/bin/dsh (ensure ~/.local/bin is on PATH).
+          releaseDraft: false
+          prerelease: false
+          args: --bundles appimage,deb
+
+  build-linux-aarch64:
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux deps (WebKit / AppImage)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Build Tauri app (Linux aarch64)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+          releaseName: DSH Desktop ${{ github.ref_type == 'tag' && github.ref_name || format('dev-{0}', github.sha) }}
+          releaseBody: |
+            Linux aarch64 build for DSH Desktop (AppImage + deb).
+          releaseDraft: false
+          prerelease: false
+          args: --bundles appimage,deb

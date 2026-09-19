@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DSH Desktop",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "identifier": "com.deepseek.dsh-desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -35,7 +35,9 @@
     "targets": [
       "nsis",
       "dmg",
-      "app"
+      "app",
+      "appimage",
+      "deb"
     ],
     "category": "DeveloperTool",
     "shortDescription": "Desktop shell for DeepSeek Harness",

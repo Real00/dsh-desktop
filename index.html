@@ -20,7 +20,7 @@
         padding: 24px;
       }
       .boot-card {
-        width: min(440px, 100%);
+        width: min(480px, 100%);
         padding: 32px 28px 24px;
         border-radius: 20px;
         background: rgba(16, 22, 40, 0.88);
@@ -50,13 +50,27 @@
           <li data-step="open">打开界面</li>
         </ol>
 
+        <!-- First-run / reopenable plugin wizard -->
+        <section id="plugin-wizard" class="plugin-wizard" hidden>
+          <h2 class="wizard-title">选择推荐插件</h2>
+          <p class="wizard-desc">首次启动可勾选要安装的插件，也可稍后在桌面设置中重新打开。</p>
+          <div id="wizard-plugins" class="wizard-plugins"></div>
+          <div class="wizard-actions">
+            <button id="wizard-install" class="retry" type="button">安装所选</button>
+            <button id="wizard-recommended" class="retry secondary" type="button">使用推荐</button>
+            <button id="wizard-skip" class="retry secondary" type="button">跳过</button>
+          </div>
+          <p id="wizard-status" class="npm-status" hidden></p>
+        </section>
+
         <pre id="detail" class="detail" hidden></pre>
         <p id="gatekeeper-note" class="gatekeeper-note" hidden></p>
         <p id="update" class="update" hidden></p>
         <div class="actions">
-          <button id="retry" class="retry" type="button" hidden>重试</button>
+          <button id="retry" class="retry" type="button" hidden>重启 dsh</button>
           <button id="copy-error" class="retry secondary" type="button" hidden>复制错误信息</button>
           <button id="update-btn" class="retry secondary" type="button" hidden>更新 dsh 运行时</button>
+          <button id="restart-harness-btn" class="retry secondary" type="button">重启 dsh</button>
         </div>
 
         <div id="app-update-banner" class="app-update-banner" hidden>
@@ -72,9 +86,10 @@
           <p id="app-update-progress" class="app-update-progress" hidden></p>
         </div>
 
-        <details class="npm-settings" open>
-          <summary>npm 源设置</summary>
+        <details class="npm-settings desktop-settings" open>
+          <summary>桌面设置</summary>
           <div class="npm-settings-body">
+            <p class="settings-section-title">npm 源</p>
             <p id="npm-current" class="npm-current">当前：加载中…</p>
             <div class="npm-presets" role="radiogroup" aria-label="npm 源预设">
               <label class="npm-preset">
@@ -98,15 +113,55 @@
               hidden
             />
             <div class="npm-actions">
-              <button id="npm-save" class="retry secondary" type="button">保存</button>
+              <button id="npm-save" class="retry secondary" type="button">保存 npm 源</button>
               <button id="npm-save-retry" class="retry" type="button" hidden>保存并重试</button>
               <button id="check-app-update-btn" class="retry secondary" type="button">检查应用更新</button>
             </div>
+
+            <hr class="settings-divider" />
+
+            <p class="settings-section-title">启动与快捷键</p>
+            <label class="npm-preset">
+              <input id="autostart-toggle" type="checkbox" />
+              <span>开机自动启动</span>
+            </label>
+            <label class="npm-preset" style="margin-top: 8px;">
+              <input id="shortcut-enabled" type="checkbox" />
+              <span>启用全局快捷键（显示/聚焦窗口）</span>
+            </label>
+            <input
+              id="shortcut-input"
+              class="npm-custom-url"
+              type="text"
+              placeholder="CommandOrControl+Shift+D"
+            />
+            <div class="npm-actions">
+              <button id="shortcut-save" class="retry secondary" type="button">保存快捷键</button>
+            </div>
+
+            <hr class="settings-divider" />
+
+            <p class="settings-section-title">CLI shim（dsh 命令）</p>
+            <p id="shim-status" class="npm-current">加载中…</p>
+            <p id="shim-hint" class="settings-hint"></p>
+            <div class="npm-actions">
+              <button id="shim-install" class="retry secondary" type="button">安装 CLI shim</button>
+              <button id="shim-remove" class="retry secondary" type="button">移除 shim</button>
+            </div>
+
+            <hr class="settings-divider" />
+
+            <p class="settings-section-title">插件与进程</p>
+            <div class="npm-actions">
+              <button id="reopen-wizard-btn" class="retry secondary" type="button">打开插件向导</button>
+              <button id="settings-restart-btn" class="retry secondary" type="button">重启 dsh</button>
+            </div>
+
             <p id="npm-status" class="npm-status" hidden></p>
           </div>
         </details>
 
-        <p class="hint">运行时缓存 ~/.dsh-desktop/runtime；npm 源可在下方配置。</p>
+        <p class="hint">运行时 ~/.dsh-desktop/runtime；设置保存在 ~/.dsh-desktop/settings.json。</p>
       </div>
     </main>
   </body>

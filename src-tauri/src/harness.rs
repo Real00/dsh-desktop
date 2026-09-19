@@ -1,5 +1,3 @@
- 
-
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -14,15 +12,21 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use crate::runtime::{
     check_dsh_update, ensure_managed_runtime, ensure_path_for_gui, update_managed_runtime,
 };
+use crate::settings::{self, load_settings};
+use crate::shim;
 
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 const PLUGIN_INSTALL_TIMEOUT: Duration = Duration::from_secs(240);
 const POLL_INTERVAL: Duration = Duration::from_millis(400);
+const MAX_CRASH_RETRIES: u32 = 3;
+const CRASH_BACKOFF_BASE: Duration = Duration::from_secs(2);
 
 struct DefaultPlugin {
     id: &'static str,
     install_spec: &'static str,
     detect_needles: &'static [&'static str],
+    label: &'static str,
+    description: &'static str,
 }
 
 const DEFAULT_PLUGINS: &[DefaultPlugin] = &[
@@ -30,25 +34,51 @@ const DEFAULT_PLUGINS: &[DefaultPlugin] = &[
         id: "dshmarket",
         install_spec: "dshmarket",
         detect_needles: &["dshmarket"],
+        label: "插件市场",
+        description: "dshmarket — 应用内插件市场",
     },
-    // dsh-modellix currently crashes `dsh web` with:
-    // cannot get property "webServer" without inject — omit until compatible.
     DefaultPlugin {
         id: "loopx",
         install_spec: "github:huangruiteng/loopx",
         detect_needles: &["loopx", "dsh-loopx", "dsh-loopx-plugin"],
+        label: "LoopX",
+        description: "长任务 Goal / Todo / 配额控制面",
     },
     DefaultPlugin {
         id: "dsh-chat-import",
         install_spec: "dsh-chat-import",
         detect_needles: &["dsh-chat-import"],
+        label: "对话导入",
+        description: "dsh-chat-import — 导入外部对话",
     },
     DefaultPlugin {
         id: "dsh-llm-capabilities",
         install_spec: "dsh-llm-capabilities",
         detect_needles: &["dsh-llm-capabilities"],
+        label: "LLM 能力",
+        description: "dsh-llm-capabilities — 模型能力探测",
     },
 ];
+
+pub fn default_plugin_ids() -> Vec<&'static str> {
+    DEFAULT_PLUGINS.iter().map(|p| p.id).collect()
+}
+
+pub fn plugin_catalog_json() -> serde_json::Value {
+    let plugins: Vec<serde_json::Value> = DEFAULT_PLUGINS
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id,
+                "label": p.label,
+                "description": p.description,
+                "installSpec": p.install_spec,
+                "recommended": true,
+            })
+        })
+        .collect();
+    serde_json::json!({ "plugins": plugins })
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -59,6 +89,19 @@ pub enum HarnessEvent {
     Ready { url: String },
     Error { message: String },
     UpdateAvailable { current: String, latest: String },
+    NeedsWizard {
+        plugins: Vec<serde_json::Value>,
+        message: String,
+    },
+    Crashed {
+        message: String,
+        attempt: u32,
+        will_retry: bool,
+    },
+    Restarting {
+        message: String,
+        attempt: u32,
+    },
 }
 
 pub struct HarnessManager {
@@ -69,6 +112,10 @@ struct HarnessInner {
     child: Option<Child>,
     url: Option<String>,
     port: Option<u16>,
+    /// When true, exit is intentional (stop / quit / manual restart).
+    stopping: bool,
+    generation: u64,
+    crash_retries: u32,
 }
 
 impl HarnessManager {
@@ -78,12 +125,17 @@ impl HarnessManager {
                 child: None,
                 url: None,
                 port: None,
+                stopping: false,
+                generation: 0,
+                crash_retries: 0,
             }),
         }
     }
 
     pub fn stop(&self) {
         let mut guard = self.inner.lock().expect("harness lock");
+        guard.stopping = true;
+        guard.generation = guard.generation.wrapping_add(1);
         if let Some(mut child) = guard.child.take() {
             let _ = child.kill();
             let _ = child.wait();
@@ -94,6 +146,25 @@ impl HarnessManager {
 
     pub fn current_url(&self) -> Option<String> {
         self.inner.lock().expect("harness lock").url.clone()
+    }
+
+    fn begin_start(&self) -> u64 {
+        let mut guard = self.inner.lock().expect("harness lock");
+        guard.stopping = true;
+        if let Some(mut child) = guard.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        guard.url = None;
+        guard.port = None;
+        guard.generation = guard.generation.wrapping_add(1);
+        let gen = guard.generation;
+        guard.stopping = false;
+        gen
+    }
+
+    fn reset_crash_retries(&self) {
+        self.inner.lock().expect("harness lock").crash_retries = 0;
     }
 }
 
@@ -234,16 +305,41 @@ fn install_one_plugin(node: &str, bin_js: &PathBuf, spec: &str) -> Result<(), St
         .map_err(|_| "install thread panicked".to_string())?
 }
 
-fn ensure_default_plugins(app: &AppHandle, node: &str, bin_js: &PathBuf) {
-    let missing: Vec<&DefaultPlugin> = DEFAULT_PLUGINS
+fn selected_plugins_to_install() -> Vec<&'static DefaultPlugin> {
+    let selected = settings::selected_plugin_ids();
+    let ids: Vec<String> = if selected.is_empty() {
+        // Wizard completed with empty selection — install nothing.
+        // If somehow selected is empty but wizard not run, fall back to all.
+        if load_settings().wizard_completed {
+            Vec::new()
+        } else {
+            DEFAULT_PLUGINS.iter().map(|p| p.id.to_string()).collect()
+        }
+    } else {
+        selected
+    };
+    DEFAULT_PLUGINS
         .iter()
+        .filter(|p| ids.iter().any(|id| id == p.id))
+        .collect()
+}
+
+fn ensure_selected_plugins(app: &AppHandle, node: &str, bin_js: &PathBuf) {
+    let wanted = selected_plugins_to_install();
+    if wanted.is_empty() {
+        return;
+    }
+
+    let missing: Vec<&DefaultPlugin> = wanted
+        .iter()
+        .copied()
         .filter(|p| !is_plugin_installed(p))
         .collect();
     if missing.is_empty() {
         return;
     }
 
-    let mut installed_ids: Vec<&str> = DEFAULT_PLUGINS
+    let mut installed_ids: Vec<&str> = wanted
         .iter()
         .filter(|p| is_plugin_installed(p))
         .map(|p| p.id)
@@ -348,7 +444,7 @@ fn http_page_ready(url: &str) -> bool {
             body.len() > 32
                 && (body.contains('<') || body.contains('{') || body.contains("dsh"))
         }
-        Err(_) => false
+        Err(_) => false,
     }
 }
 
@@ -415,10 +511,152 @@ fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<S
     ))
 }
 
+fn supervise_after_ready(app: AppHandle, manager: Arc<HarnessManager>, generation: u64) {
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(750));
+            let exit_status = {
+                let mut guard = manager.inner.lock().expect("harness lock");
+                if guard.generation != generation || guard.stopping {
+                    return;
+                }
+                match guard.child.as_mut() {
+                    Some(child) => match child.try_wait() {
+                        Ok(Some(status)) => {
+                            guard.child = None;
+                            Some(status)
+                        }
+                        Ok(None) => None,
+                        Err(_) => None,
+                    },
+                    None => return,
+                }
+            };
+
+            let Some(status) = exit_status else {
+                continue;
+            };
+
+            let (attempt, will_retry) = {
+                let mut guard = manager.inner.lock().expect("harness lock");
+                if guard.generation != generation || guard.stopping {
+                    return;
+                }
+                guard.crash_retries += 1;
+                let attempt = guard.crash_retries;
+                (attempt, attempt <= MAX_CRASH_RETRIES)
+            };
+
+            emit(
+                &app,
+                HarnessEvent::Crashed {
+                    message: format!("dsh 意外退出：{status}"),
+                    attempt,
+                    will_retry,
+                },
+            );
+
+            let _ = app.run_on_main_thread({
+                let app = app.clone();
+                move || {
+                    show_splash_window(&app);
+                }
+            });
+
+            if !will_retry {
+                emit(
+                    &app,
+                    HarnessEvent::Error {
+                        message: format!(
+                            "dsh 连续崩溃 {MAX_CRASH_RETRIES} 次，已停止自动重启。可点击「重启 dsh」。"
+                        ),
+                    },
+                );
+                return;
+            }
+
+            let backoff = CRASH_BACKOFF_BASE * attempt;
+            emit(
+                &app,
+                HarnessEvent::Restarting {
+                    message: format!(
+                        "正在自动重启 dsh（第 {attempt}/{MAX_CRASH_RETRIES} 次）…"
+                    ),
+                    attempt,
+                },
+            );
+            thread::sleep(backoff);
+
+            {
+                let guard = manager.inner.lock().expect("harness lock");
+                if guard.generation != generation || guard.stopping {
+                    return;
+                }
+            }
+
+            start_harness_inner(app.clone(), manager.clone(), false);
+            return;
+        }
+    });
+}
+
+/// Show / focus the splash (main) window for settings or error UI.
+pub fn show_splash_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("DSH Desktop")
+        .inner_size(1280.0, 840.0)
+        .min_inner_size(960.0, 640.0)
+        .focused(true)
+        .build();
+}
+
+pub fn focus_main_or_harness(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("harness") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        return;
+    }
+    show_splash_window(app);
+}
 
 pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
+    start_harness_inner(app, manager, true);
+}
+
+fn start_harness_inner(app: AppHandle, manager: Arc<HarnessManager>, reset_retries: bool) {
     thread::spawn(move || {
-        manager.stop();
+        let generation = manager.begin_start();
+        if reset_retries {
+            manager.reset_crash_retries();
+        }
+
+        settings::migrate_wizard_if_needed(&default_plugin_ids());
+
+        let settings = load_settings();
+        if !settings.wizard_completed {
+            let catalog = plugin_catalog_json();
+            let plugins = catalog
+                .get("plugins")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]));
+            let plugins_vec = plugins.as_array().cloned().unwrap_or_default();
+            emit(
+                &app,
+                HarnessEvent::NeedsWizard {
+                    plugins: plugins_vec,
+                    message: "首次启动：请选择要安装的推荐插件".into(),
+                },
+            );
+            return;
+        }
+
         ensure_path_for_gui();
 
         emit(
@@ -452,8 +690,8 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
         // Local .npmrc writes only — cheap; leave on path so plugin install / npm
         // child processes see the user's chosen registry.
         let _ = crate::settings::apply_npm_registry_files();
-        // Skips plugins already present in web profile package.json or bootstrap marker.
-        ensure_default_plugins(&app, &node, &bin_js);
+        // Install missing plugins from the *selected* wizard set only.
+        ensure_selected_plugins(&app, &node, &bin_js);
 
         let port = match find_free_port() {
             Ok(p) => p,
@@ -467,6 +705,13 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
                 return;
             }
         };
+
+        {
+            let guard = manager.inner.lock().expect("harness lock");
+            if guard.generation != generation || guard.stopping {
+                return;
+            }
+        }
 
         emit(
             &app,
@@ -484,7 +729,6 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
         };
 
         // npm view hits the registry with no timeout — never block spawn/UI on it.
-        // Run after spawn so the splash can still show UpdateAvailable while waiting.
         let app_for_update = app.clone();
         thread::spawn(move || {
             if let Ok((current, latest, available)) = check_dsh_update() {
@@ -510,10 +754,18 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
 
         {
             let mut guard = manager.inner.lock().expect("harness lock");
+            if guard.generation != generation || guard.stopping {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
             guard.child = Some(child);
             guard.url = Some(url.clone());
             guard.port = Some(port);
         }
+
+        // PATH shim if enabled in settings.
+        shim::maybe_install_shim_after_ready();
 
         emit(
             &app,
@@ -542,6 +794,8 @@ pub fn start_harness(app: AppHandle, manager: Arc<HarnessManager>) {
                 },
             );
         }
+
+        supervise_after_ready(app, manager, generation);
     });
 }
 
@@ -561,8 +815,9 @@ fn open_dsh_window(app: &AppHandle, url: &str) -> Result<(), String> {
         .focused(true)
         .build()
         .map_err(|e| e.to_string())?;
+    // Hide splash instead of destroying it — Desktop settings / restart UI stay available.
     if let Some(splash) = app.get_webview_window("main") {
-        let _ = splash.close();
+        let _ = splash.hide();
     }
     Ok(())
 }
@@ -590,4 +845,8 @@ pub fn cmd_runtime_info() -> Result<serde_json::Value, String> {
         "bin": crate::runtime::runtime_bin_js()?.to_string_lossy(),
         "ready": crate::runtime::runtime_bin_js().map(|p| p.is_file()).unwrap_or(false),
     }))
+}
+
+pub fn cmd_plugin_catalog() -> Result<serde_json::Value, String> {
+    Ok(plugin_catalog_json())
 }

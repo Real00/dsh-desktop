@@ -341,3 +341,88 @@ body {
   0% { transform: translateX(-120%); }
   100% { transform: translateX(320%); }
 }
+
+.plugin-wizard {
+  margin-top: 16px;
+  text-align: left;
+  padding: 14px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(110, 168, 255, 0.35);
+  background: rgba(79, 140, 255, 0.08);
+}
+
+.wizard-title {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  color: #e8eefc;
+}
+
+.wizard-desc {
+  margin: 0 0 12px;
+  font-size: 0.8rem;
+  color: #9db0d4;
+}
+
+.wizard-plugins {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wizard-plugin {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #d7e3ff;
+  cursor: pointer;
+}
+
+.wizard-plugin small {
+  display: block;
+  color: #8fa3c7;
+  font-size: 0.75rem;
+  margin-top: 2px;
+}
+
+.wizard-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.wizard-actions .retry {
+  margin-top: 0;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+.shell.wizard-open .spinner,
+.shell.wizard-open .boot-steps {
+  display: none;
+}
+
+.settings-section-title {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #c5d4f0;
+}
+
+.settings-divider {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 14px 0;
+}
+
+.settings-hint {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  color: #7f91b3;
+  line-height: 1.4;
+}
+
+.card.boot-card {
+  width: min(480px, 100%);
+}

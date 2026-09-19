@@ -8,12 +8,31 @@ use crate::runtime::{desktop_home, runtime_dir};
 
 pub const DEFAULT_NPM_REGISTRY: &str = "https://registry.npmjs.org";
 pub const NPMMIRROR_REGISTRY: &str = "https://registry.npmmirror.com";
+pub const DEFAULT_GLOBAL_SHORTCUT: &str = "CommandOrControl+Shift+D";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub npm_registry: Option<String>,
+    /// First-run plugin wizard finished (or migrated for existing installs).
+    #[serde(default)]
+    pub wizard_completed: bool,
+    /// Plugin ids selected in the wizard (install missing from this set).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_plugins: Option<Vec<String>>,
+    /// Launch app at login (synced with autostart plugin).
+    #[serde(default)]
+    pub autostart: bool,
+    /// Optional global shortcut accelerator string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_shortcut: Option<String>,
+    /// Whether the global shortcut is active.
+    #[serde(default)]
+    pub global_shortcut_enabled: bool,
+    /// Whether the user-local `dsh` PATH shim should exist.
+    #[serde(default)]
+    pub cli_shim_enabled: bool,
 }
 
 fn settings_path() -> Result<PathBuf, String> {
@@ -58,6 +77,38 @@ fn web_profile_dir() -> Option<PathBuf> {
     Some(home_dir()?.join(".dsh").join("profiles").join("web"))
 }
 
+fn bootstrap_marker_exists() -> bool {
+    home_dir()
+        .map(|h| h.join(".dsh-desktop").join("bootstrap-plugins.json").is_file())
+        .unwrap_or(false)
+}
+
+fn runtime_ready_quick() -> bool {
+    crate::runtime::runtime_bin_js()
+        .map(|p| p.is_file())
+        .unwrap_or(false)
+}
+
+/// Existing installs (pre-wizard) skip the wizard once.
+pub fn migrate_wizard_if_needed(default_plugin_ids: &[&str]) {
+    let mut settings = load_settings();
+    if settings.wizard_completed {
+        return;
+    }
+    if bootstrap_marker_exists() || runtime_ready_quick() {
+        settings.wizard_completed = true;
+        if settings.selected_plugins.is_none() {
+            settings.selected_plugins = Some(
+                default_plugin_ids
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
+            );
+        }
+        let _ = save_settings(&settings);
+    }
+}
+
 fn write_or_clear_npmrc(dir: &Path, registry: Option<&str>) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let npmrc = dir.join(".npmrc");
@@ -81,7 +132,6 @@ fn write_or_clear_npmrc(dir: &Path, registry: Option<&str>) -> Result<(), String
             fs::write(&npmrc, body).map_err(|e| e.to_string())?;
         }
         _ => {
-            // Using default: remove registry= line (or delete file if only that).
             if !npmrc.exists() {
                 return Ok(());
             }
@@ -165,4 +215,82 @@ pub fn cmd_set_npm_registry(registry: String) -> Result<serde_json::Value, Strin
     save_settings(&settings)?;
     apply_npm_registry_files()?;
     cmd_get_npm_settings()
+}
+
+pub fn selected_plugin_ids() -> Vec<String> {
+    let settings = load_settings();
+    settings
+        .selected_plugins
+        .unwrap_or_default()
+}
+
+pub fn cmd_get_desktop_settings() -> Result<serde_json::Value, String> {
+    let s = load_settings();
+    Ok(serde_json::json!({
+        "wizardCompleted": s.wizard_completed,
+        "selectedPlugins": s.selected_plugins.clone().unwrap_or_default(),
+        "autostart": s.autostart,
+        "globalShortcut": s.global_shortcut.clone().unwrap_or_else(|| DEFAULT_GLOBAL_SHORTCUT.to_string()),
+        "globalShortcutEnabled": s.global_shortcut_enabled,
+        "cliShimEnabled": s.cli_shim_enabled,
+        "defaultShortcut": DEFAULT_GLOBAL_SHORTCUT,
+    }))
+}
+
+pub fn cmd_complete_plugin_wizard(
+    selected: Vec<String>,
+    use_recommended: bool,
+    recommended: &[&str],
+) -> Result<serde_json::Value, String> {
+    let mut settings = load_settings();
+    let ids = if use_recommended {
+        recommended.iter().map(|s| (*s).to_string()).collect()
+    } else {
+        selected
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+    };
+    settings.wizard_completed = true;
+    settings.selected_plugins = Some(ids.clone());
+    save_settings(&settings)?;
+    Ok(serde_json::json!({
+        "wizardCompleted": true,
+        "selectedPlugins": ids,
+    }))
+}
+
+pub fn cmd_set_autostart_pref(enabled: bool) -> Result<serde_json::Value, String> {
+    let mut settings = load_settings();
+    settings.autostart = enabled;
+    save_settings(&settings)?;
+    Ok(serde_json::json!({ "autostart": enabled }))
+}
+
+pub fn cmd_set_global_shortcut_pref(
+    shortcut: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let trimmed = shortcut.trim().to_string();
+    let mut settings = load_settings();
+    settings.global_shortcut = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.clone())
+    };
+    settings.global_shortcut_enabled = enabled && !trimmed.is_empty();
+    save_settings(&settings)?;
+    Ok(serde_json::json!({
+        "globalShortcut": settings.global_shortcut.clone().unwrap_or_default(),
+        "globalShortcutEnabled": settings.global_shortcut_enabled,
+    }))
+}
+
+#[allow(dead_code)]
+pub fn cmd_set_cli_shim_pref(enabled: bool) -> Result<serde_json::Value, String> {
+    let mut settings = load_settings();
+    settings.cli_shim_enabled = enabled;
+    save_settings(&settings)?;
+    Ok(serde_json::json!({ "cliShimEnabled": enabled }))
 }

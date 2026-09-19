@@ -14,7 +14,8 @@
 
 ## 前置条件
 
-- Windows 10+ / macOS 11+ Apple Silicon（CI 打 Windows NSIS + macOS arm64；不做 Intel Mac）
+- Windows 10+ / macOS 11+ Apple Silicon / Linux x64（及可选 aarch64）
+- CI：Windows NSIS、macOS arm64、Linux AppImage/deb；不做 Intel Mac
 - [Node.js](https://nodejs.org/) **≥ 22.19**（运行时用来拉起 `@deepseek-ai/dsh`）
 - 开发还需要：Rust stable、系统 WebView 依赖（见 [Tauri prerequisites](https://tauri.app/start/prerequisites/)）
 
@@ -64,6 +65,7 @@ npm run tauri build
 | `.github/workflows/ci.yml` | PR / push 时构建前端 |
 | `.github/workflows/release-windows.yml` | 打 **Windows NSIS** 安装包 |
 | `.github/workflows/release-macos.yml` | 打 **Apple Silicon** `.dmg` / `.app`（不做 Intel） |
+| `.github/workflows/release-linux.yml` | 打 **Linux** AppImage + deb（x64；aarch64 best-effort） |
 
 触发方式：
 
@@ -72,25 +74,30 @@ npm run tauri build
 
 产物通过 `tauri-apps/tauri-action` 发到 **Draft Release**（Windows `.exe` / NSIS，macOS arm64 `.dmg`）。
 
-## 默认插件
+## 默认插件与首次向导
 
-首次启动会按需安装：
-
-```bash
-dsh plugin --profile web add dshmarket
-dsh plugin --profile web add dsh-modellix
-dsh plugin --profile web add github:huangruiteng/loopx
-```
+首次启动（或 `settings.json` 中 `wizardCompleted` 未设置）会显示**插件向导**，推荐勾选：
 
 | 插件 | 作用 |
 | --- | --- |
 | `dshmarket` | 应用内插件市场 |
-| `dsh-modellix` | 多模型网关（28+ / 免费路由） |
 | `loopx` | 长任务 Goal / Todo / 配额控制面 |
+| `dsh-chat-import` | 对话导入 |
+| `dsh-llm-capabilities` | 模型能力探测 |
 
-已安装检测：`~/.dsh/profiles/web/package.json` 关键词，或 `~/.dsh-desktop/bootstrap-plugins.json`。
+可「使用推荐」「安装所选」或「跳过」。完成后只安装**所选**集合中缺失的插件。可在启动页「桌面设置 → 打开插件向导」重新打开。
 
-安装失败不会阻止启动。
+已安装检测：`~/.dsh/profiles/web/package.json` 关键词，或 `~/.dsh-desktop/bootstrap-plugins.json`。安装失败不会阻止启动。
+
+## 桌面设置（启动页）
+
+- 窗口位置/大小记忆（`tauri-plugin-window-state`）
+- 开机启动、全局快捷键（默认 `CommandOrControl+Shift+D`，默认关闭）
+- CLI shim：`~/.local/bin/dsh`（Unix）或 `~/.dsh-desktop/bin/dsh.cmd`（Windows）；**不会**自动改 shell rc
+- 重启 dsh、npm 源、应用更新
+- 应用菜单：重启 dsh / 桌面设置 / 插件向导
+
+dsh 意外退出后会自动重启（最多 3 次，带退避）；主动退出或手动重启不会触发。
 
 ## 技术说明
 

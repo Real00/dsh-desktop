@@ -1,6 +1,6 @@
 [package]
 name = "dsh-desktop"
-version = "0.1.18"
+version = "0.1.19"
 description = "Out-of-the-box Tauri desktop shell for DeepSeek Harness (dsh)"
 authors = ["wangjunrui"]
 edition = "2021"
@@ -27,3 +27,8 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-autostart = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-window-state = "2"
