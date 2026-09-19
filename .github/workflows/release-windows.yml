@@ -40,7 +40,7 @@ jobs:
 
             First-run notes:
             - Requires Node.js ≥ 22.19 on the machine (used to launch `@deepseek-ai/dsh`).
-            - Default plugins installed on first launch: dshmarket, loopx, dsh-chat-import.
+            - Default plugins installed on first launch: dshmarket, loopx, dsh-chat-import, dsh-llm-capabilities.
           releaseDraft: false
           prerelease: false
           args: --bundles nsis

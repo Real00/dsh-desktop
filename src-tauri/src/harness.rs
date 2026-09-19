@@ -43,6 +43,11 @@ const DEFAULT_PLUGINS: &[DefaultPlugin] = &[
         install_spec: "dsh-chat-import",
         detect_needles: &["dsh-chat-import"],
     },
+    DefaultPlugin {
+        id: "dsh-llm-capabilities",
+        install_spec: "dsh-llm-capabilities",
+        detect_needles: &["dsh-llm-capabilities"],
+    },
 ];
 
 #[derive(Debug, Clone, Serialize)]
