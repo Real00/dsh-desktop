@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::collections::VecDeque;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -468,20 +469,54 @@ fn drain_pipes(child: &mut Child) -> mpsc::Receiver<String> {
     rx
 }
 
+fn push_recent(recent: &mut VecDeque<String>, line: String) {
+    const CAP: usize = 40;
+    if recent.len() >= CAP {
+        recent.pop_front();
+    }
+    recent.push_back(line);
+}
+
+fn format_recent_tail(recent: &VecDeque<String>) -> String {
+    let n = recent.len().min(30);
+    if n == 0 {
+        return String::new();
+    }
+    let start = recent.len() - n;
+    let body: Vec<&str> = recent.iter().skip(start).map(|s| s.as_str()).collect();
+    format!("\n--- 最近输出 / recent output ---\n{}", body.join("\n"))
+}
+
+fn drain_remaining_lines(lines: &mpsc::Receiver<String>, recent: &mut VecDeque<String>) {
+    let drain_deadline = Instant::now() + Duration::from_millis(500);
+    while Instant::now() < drain_deadline {
+        match lines.try_recv() {
+            Ok(line) => push_recent(recent, line),
+            Err(mpsc::TryRecvError::Empty) => thread::sleep(Duration::from_millis(40)),
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+}
+
 fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<String, String> {
     let fallback = format!("http://127.0.0.1:{port}");
     let mut discovered: Option<String> = None;
     let lines = drain_pipes(child);
+    let mut recent: VecDeque<String> = VecDeque::with_capacity(40);
 
     while Instant::now() < deadline {
         while let Ok(line) = lines.try_recv() {
             if let Some(url) = extract_url(&line) {
                 discovered = Some(url);
             }
+            push_recent(&mut recent, line);
         }
 
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            return Err(format!("dsh 进程提前退出 / exited early: {status}"));
+            // Brief wait to drain remaining stdout/stderr so splash shows real cause.
+            drain_remaining_lines(&lines, &mut recent);
+            let detail = format_recent_tail(&recent);
+            return Err(format!("dsh 进程提前退出 / exited early: {status}{detail}"));
         }
 
         // Prefer the stdout URL (includes ?token=). Bare port often returns 401.
@@ -504,8 +539,10 @@ fn wait_until_ready(child: &mut Child, port: u16, deadline: Instant) -> Result<S
         thread::sleep(POLL_INTERVAL);
     }
 
+    drain_remaining_lines(&lines, &mut recent);
+    let detail = format_recent_tail(&recent);
     Err(format!(
-        "等待 dsh 就绪超时（{}s）。/ Timed out waiting for dsh after {}s.",
+        "等待 dsh 就绪超时（{}s）。/ Timed out waiting for dsh after {}s.{detail}",
         READY_TIMEOUT.as_secs(),
         READY_TIMEOUT.as_secs()
     ))
@@ -834,6 +871,138 @@ fn is_core_bundle(name: &str) -> bool {
         .any(|c| c.eq_ignore_ascii_case(name))
 }
 
+fn core_bundles_json_array() -> Vec<serde_json::Value> {
+    CORE_BUNDLES
+        .iter()
+        .map(|s| serde_json::Value::String((*s).to_string()))
+        .collect()
+}
+
+/// Ensure `dsh.profile` object exists; return mutable reference to `bundles` array.
+fn ensure_profile_bundles(value: &mut serde_json::Value) -> &mut Vec<serde_json::Value> {
+    let root = value.as_object_mut().expect("package.json root object");
+    let dsh = root
+        .entry("dsh")
+        .or_insert_with(|| serde_json::json!({}));
+    let dsh_obj = dsh.as_object_mut().expect("dsh object");
+    let profile = dsh_obj
+        .entry("profile")
+        .or_insert_with(|| serde_json::json!({}));
+    let profile_obj = profile.as_object_mut().expect("dsh.profile object");
+    let bundles = profile_obj
+        .entry("bundles")
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if !bundles.is_array() {
+        *bundles = serde_json::Value::Array(Vec::new());
+    }
+    bundles.as_array_mut().expect("bundles array")
+}
+
+fn bundle_name_matches(entry: &str, name: &str, matching_ids: &[String]) -> bool {
+    if is_core_bundle(entry) {
+        return false;
+    }
+    entry.eq_ignore_ascii_case(name)
+        || matching_ids.iter().any(|id| {
+            entry.eq_ignore_ascii_case(id)
+                || id.eq_ignore_ascii_case(entry)
+                || entry
+                    .to_ascii_lowercase()
+                    .contains(&id.to_ascii_lowercase())
+                || id
+                    .to_ascii_lowercase()
+                    .contains(&entry.to_ascii_lowercase())
+        })
+}
+
+/// Strip matching non-core entries from `dsh.profile.bundles` (and `dsh.profile.plugins` if present).
+fn drop_from_profile_plugin_lists(
+    value: &mut serde_json::Value,
+    name: &str,
+    matching_ids: &[String],
+) -> Vec<String> {
+    let mut removed: Vec<String> = Vec::new();
+    let Some(root) = value.as_object_mut() else {
+        return removed;
+    };
+    let Some(dsh) = root.get_mut("dsh").and_then(|v| v.as_object_mut()) else {
+        return removed;
+    };
+    let Some(profile) = dsh.get_mut("profile").and_then(|v| v.as_object_mut()) else {
+        return removed;
+    };
+    for key in ["bundles", "plugins"] {
+        let Some(arr) = profile.get_mut(key).and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        let before = arr.len();
+        arr.retain(|item| {
+            let Some(s) = item.as_str() else {
+                return true;
+            };
+            if bundle_name_matches(s, name, matching_ids) {
+                removed.push(s.to_string());
+                false
+            } else {
+                true
+            }
+        });
+        let _ = before;
+    }
+    removed.sort();
+    removed.dedup();
+    removed
+}
+
+/// Keep only core bundles in profile plugin lists; return cleared non-core names.
+fn retain_core_only_profile_lists(value: &mut serde_json::Value) -> Vec<String> {
+    let mut cleared: Vec<String> = Vec::new();
+    let bundles = ensure_profile_bundles(value);
+    let kept: Vec<serde_json::Value> = bundles
+        .iter()
+        .filter_map(|item| {
+            let s = item.as_str()?;
+            if is_core_bundle(s) {
+                Some(serde_json::Value::String(s.to_string()))
+            } else {
+                cleared.push(s.to_string());
+                None
+            }
+        })
+        .collect();
+    // Always ensure both core bundles are present.
+    let mut final_list = core_bundles_json_array();
+    for item in kept {
+        let s = item.as_str().unwrap_or("");
+        if !final_list.iter().any(|c| c.as_str() == Some(s)) {
+            final_list.push(item);
+        }
+    }
+    *ensure_profile_bundles(value) = final_list;
+
+    if let Some(profile) = value
+        .pointer_mut("/dsh/profile")
+        .and_then(|v| v.as_object_mut())
+    {
+        if let Some(arr) = profile.get_mut("plugins").and_then(|v| v.as_array_mut()) {
+            arr.retain(|item| {
+                let Some(s) = item.as_str() else {
+                    return true;
+                };
+                if is_core_bundle(s) {
+                    true
+                } else {
+                    cleared.push(s.to_string());
+                    false
+                }
+            });
+        }
+    }
+    cleared.sort();
+    cleared.dedup();
+    cleared
+}
+
 fn plugin_ids_matching_dep(name: &str) -> Vec<String> {
     let mut ids = vec![name.to_string()];
     for p in DEFAULT_PLUGINS {
@@ -919,7 +1088,8 @@ fn remove_one_plugin(node: &str, bin_js: &PathBuf, name: &str) -> Result<(), Str
 }
 
 pub fn cmd_list_installed_plugins() -> Result<serde_json::Value, String> {
-    let mut plugins = Vec::new();
+    use std::collections::BTreeMap;
+    let mut by_id: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     if let Some(pkg) = web_profile_package_json() {
         if let Ok(text) = std::fs::read_to_string(&pkg) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -927,22 +1097,45 @@ pub fn cmd_list_installed_plugins() -> Result<serde_json::Value, String> {
                     for (id, ver) in deps {
                         let version = ver.as_str().map(|s| s.to_string());
                         let core = is_core_bundle(id);
-                        plugins.push(serde_json::json!({
-                            "id": id,
-                            "version": version,
-                            "core": core,
-                            "removable": !core,
-                        }));
+                        by_id.insert(
+                            id.clone(),
+                            serde_json::json!({
+                                "id": id,
+                                "version": version,
+                                "core": core,
+                                "removable": !core,
+                                "source": "dependencies",
+                            }),
+                        );
+                    }
+                }
+                // Also surface dsh.profile.bundles (what dsh actually loads).
+                if let Some(arr) = value.pointer("/dsh/profile/bundles").and_then(|v| v.as_array()) {
+                    for item in arr {
+                        let Some(id) = item.as_str() else { continue };
+                        let core = is_core_bundle(id);
+                        by_id
+                            .entry(id.to_string())
+                            .and_modify(|existing| {
+                                existing
+                                    .as_object_mut()
+                                    .map(|o| o.insert("source".into(), serde_json::json!("both")));
+                            })
+                            .or_insert_with(|| {
+                                serde_json::json!({
+                                    "id": id,
+                                    "version": serde_json::Value::Null,
+                                    "core": core,
+                                    "removable": !core,
+                                    "source": "bundles",
+                                })
+                            });
                     }
                 }
             }
         }
     }
-    plugins.sort_by(|a, b| {
-        let a_id = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let b_id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        a_id.cmp(b_id)
-    });
+    let plugins: Vec<serde_json::Value> = by_id.into_values().collect();
     Ok(serde_json::json!({ "plugins": plugins }))
 }
 
@@ -986,6 +1179,10 @@ fn drop_dep_from_web_package_json(name: &str) -> Result<Vec<String>, String> {
             }
         }
     }
+    let from_bundles = drop_from_profile_plugin_lists(&mut value, name, &matching_ids);
+    removed.extend(from_bundles);
+    removed.sort();
+    removed.dedup();
     if !removed.is_empty() {
         let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
         std::fs::write(&pkg_path, format!("{body}\n")).map_err(|e| e.to_string())?;
@@ -1038,9 +1235,9 @@ pub fn cmd_remove_plugin(name: String) -> Result<serde_json::Value, String> {
     }))
 }
 
-/// Nuclear recovery: backup web profile package.json and clear non-core dependencies
-/// so the next launch will not load third-party plugins. Also clears selectedPlugins
-/// and bootstrap marker plugin list.
+/// Nuclear recovery: backup web profile package.json, clear non-core dependencies
+/// and non-core `dsh.profile.bundles` so the next launch will not load third-party
+/// plugins. Also clears selectedPlugins and bootstrap marker plugin list.
 pub fn cmd_safe_disable_all_plugins() -> Result<serde_json::Value, String> {
     let pkg_path = web_profile_package_json().ok_or_else(|| "cannot resolve home dir".to_string())?;
     if !pkg_path.is_file() {
@@ -1074,6 +1271,12 @@ pub fn cmd_safe_disable_all_plugins() -> Result<serde_json::Value, String> {
             cleared.push(key);
         }
     }
+    // Also strip non-core entries from dsh.profile.bundles (what dsh loads).
+    let cleared_bundles = retain_core_only_profile_lists(&mut value);
+    cleared.extend(cleared_bundles.iter().cloned());
+    cleared.sort();
+    cleared.dedup();
+
     let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
     std::fs::write(&pkg_path, format!("{body}\n")).map_err(|e| e.to_string())?;
 
@@ -1096,6 +1299,8 @@ pub fn cmd_safe_disable_all_plugins() -> Result<serde_json::Value, String> {
         "ok": true,
         "backup": bak.to_string_lossy(),
         "cleared": cleared,
+        "clearedBundles": cleared_bundles,
+        "coreBundles": CORE_BUNDLES,
     }))
 }
 
