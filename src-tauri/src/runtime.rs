@@ -35,64 +35,203 @@ pub fn read_installed_version() -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
 }
 
-/// Expand PATH so macOS .app launches can find Homebrew / nvm node.
+fn path_sep() -> char {
+    if cfg!(windows) { ';' } else { ':' }
+}
+
+fn path_contains(parts: &[String], candidate: &str) -> bool {
+    let sep = path_sep();
+    parts.iter().any(|p| p.split(sep).any(|x| x.eq_ignore_ascii_case(candidate)))
+}
+
+fn prepend_if_dir(parts: &mut Vec<String>, dir: PathBuf) {
+    if dir.is_dir() {
+        let s = dir.to_string_lossy().to_string();
+        if !path_contains(parts, &s) {
+            parts.insert(0, s);
+        }
+    }
+}
+
+/// Expand PATH so GUI launches can find Node/npm (Homebrew/nvm on Unix;
+/// Program Files / nvm-windows / fnm on Windows).
 pub fn ensure_path_for_gui() {
     let mut parts: Vec<String> = Vec::new();
     if let Ok(existing) = std::env::var("PATH") {
         parts.push(existing);
     }
-    let extras = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-    ];
-    for e in extras {
-        if !parts.iter().any(|p| p.split(':').any(|x| x == e)) {
-            parts.insert(0, e.to_string());
+
+    #[cfg(windows)]
+    {
+        let mut win_extras: Vec<PathBuf> = Vec::new();
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            win_extras.push(PathBuf::from(&pf).join("nodejs"));
         }
-    }
-    // nvm default alias if present
-    if let Some(home) = std::env::var_os("HOME") {
-        let nvm = PathBuf::from(&home).join(".nvm/versions/node");
-        if nvm.is_dir() {
-            if let Ok(rd) = fs::read_dir(&nvm) {
-                let mut versions: Vec<_> = rd.filter_map(|e| e.ok()).collect();
-                versions.sort_by_key(|e| e.file_name());
-                if let Some(last) = versions.last() {
-                    let bin = last.path().join("bin");
-                    if bin.is_dir() {
-                        parts.insert(0, bin.to_string_lossy().to_string());
+        if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+            win_extras.push(PathBuf::from(&pf86).join("nodejs"));
+        }
+        // Fallbacks when env vars are missing
+        win_extras.push(PathBuf::from(r"C:\Program Files\nodejs"));
+        win_extras.push(PathBuf::from(r"C:\Program Files (x86)\nodejs"));
+
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            win_extras.push(PathBuf::from(&local).join("Programs").join("node"));
+            // fnm default install root
+            win_extras.push(PathBuf::from(&local).join("fnm_multishells"));
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            win_extras.push(PathBuf::from(&appdata).join("npm"));
+            // nvm-windows symlink root often under APPDATA\nvm or ProgramFiles\nvm
+            win_extras.push(PathBuf::from(&appdata).join("nvm"));
+        }
+        if let Ok(nvm_home) = std::env::var("NVM_HOME") {
+            win_extras.push(PathBuf::from(nvm_home));
+        }
+        if let Ok(nvm_symlink) = std::env::var("NVM_SYMLINK") {
+            win_extras.push(PathBuf::from(nvm_symlink));
+        }
+
+        for e in win_extras {
+            prepend_if_dir(&mut parts, e);
+        }
+
+        // nvm-windows: pick latest version under NVM_HOME\v*
+        if let Ok(nvm_home) = std::env::var("NVM_HOME") {
+            let nvm = PathBuf::from(nvm_home);
+            if nvm.is_dir() {
+                if let Ok(rd) = fs::read_dir(&nvm) {
+                    let mut versions: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+                    versions.sort_by_key(|e| e.file_name());
+                    if let Some(last) = versions.last() {
+                        prepend_if_dir(&mut parts, last.path());
                     }
                 }
             }
         }
     }
-    let joined = parts.join(":");
+
+    #[cfg(not(windows))]
+    {
+        let extras = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ];
+        for e in extras {
+            if !path_contains(&parts, e) {
+                parts.insert(0, e.to_string());
+            }
+        }
+        // nvm default alias if present
+        if let Some(home) = std::env::var_os("HOME") {
+            let nvm = PathBuf::from(&home).join(".nvm/versions/node");
+            if nvm.is_dir() {
+                if let Ok(rd) = fs::read_dir(&nvm) {
+                    let mut versions: Vec<_> = rd.filter_map(|e| e.ok()).collect();
+                    versions.sort_by_key(|e| e.file_name());
+                    if let Some(last) = versions.last() {
+                        let bin = last.path().join("bin");
+                        prepend_if_dir(&mut parts, bin);
+                    }
+                }
+            }
+        }
+    }
+
+    let joined = parts.join(&path_sep().to_string());
     std::env::set_var("PATH", &joined);
+}
+
+/// Pick a CreateProcess-friendly path from `where` output on Windows.
+/// Prefer `*.cmd` / `*.exe`; skip `.ps1` and extensionless shims.
+#[cfg(windows)]
+fn pick_windows_executable(stdout: &str, preferred_exts: &[&str]) -> Option<String> {
+    let lines: Vec<&str> = stdout
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    for ext in preferred_exts {
+        for line in &lines {
+            let lower = line.to_ascii_lowercase();
+            if lower.ends_with(ext) {
+                return Some((*line).to_string());
+            }
+        }
+    }
+    // Last resort: any non-.ps1 path with an extension
+    for line in &lines {
+        let lower = line.to_ascii_lowercase();
+        if lower.ends_with(".ps1") {
+            continue;
+        }
+        let name = Path::new(line)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        if name.contains('.') {
+            return Some((*line).to_string());
+        }
+    }
+    None
 }
 
 pub fn which(bin: &str) -> Option<String> {
     #[cfg(windows)]
-    let output = Command::new("where").arg(bin).output().ok()?;
-    #[cfg(not(windows))]
-    let output = Command::new("sh")
-        .arg("-lc")
-        .arg(format!("command -v {bin}"))
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .next()?
-        .trim()
-        .to_string();
-    if path.is_empty() {
+    {
+        // Prefer explicit Win32 launchers for node/npm.
+        let (query, preferred) = match bin {
+            "npm" => ("npm.cmd", &[".cmd", ".exe"][..]),
+            "node" => ("node.exe", &[".exe"][..]),
+            other => (other, &[".exe", ".cmd", ".bat"][..]),
+        };
+
+        // Try the preferred name first (e.g. npm.cmd)
+        if let Ok(output) = Command::new("where").arg(query).output() {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(p) = pick_windows_executable(&stdout, preferred) {
+                    return Some(p);
+                }
+            }
+        }
+
+        // Fallback: `where npm` / `where node`, then filter shims
+        if query != bin {
+            if let Ok(output) = Command::new("where").arg(bin).output() {
+                if output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if let Some(p) = pick_windows_executable(&stdout, preferred) {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+
         None
-    } else {
-        Some(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let output = Command::new("sh")
+            .arg("-lc")
+            .arg(format!("command -v {bin}"))
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let path = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()?
+            .trim()
+            .to_string();
+        if path.is_empty() {
+            None
+        } else {
+            Some(path)
+        }
     }
 }
 
@@ -164,9 +303,9 @@ where
     cmd.args(["install", "--no-fund", "--no-audit", &spec])
         .current_dir(&dir);
     crate::settings::apply_npm_registry_env(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| format!("npm install failed to start: {e}"))?;
+    let output = cmd.output().map_err(|e| {
+        format!("npm install failed to start (resolved npm={npm}): {e}")
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -202,9 +341,9 @@ pub fn update_managed_runtime(version: Option<&str>) -> Result<String, String> {
     cmd.args(["install", "--no-fund", "--no-audit", &spec])
         .current_dir(&dir);
     crate::settings::apply_npm_registry_env(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| e.to_string())?;
+    let output = cmd.output().map_err(|e| {
+        format!("npm update failed to start (resolved npm={npm}): {e}")
+    })?;
     if !output.status.success() {
         return Err(format!(
             "更新失败: {}\n{}",
@@ -244,9 +383,9 @@ pub fn latest_npm_version() -> Result<String, String> {
     let mut cmd = Command::new(&npm);
     cmd.args(["view", DSH_PACKAGE, "version"]);
     crate::settings::apply_npm_registry_env(&mut cmd);
-    let output = cmd
-        .output()
-        .map_err(|e| e.to_string())?;
+    let output = cmd.output().map_err(|e| {
+        format!("npm view failed to start (resolved npm={npm}): {e}")
+    })?;
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).to_string());
     }
