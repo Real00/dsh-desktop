@@ -8,8 +8,9 @@ use std::sync::Arc;
 
 use app_update::{cmd_check_app_update, cmd_download_app_update, updates_dir_path};
 use harness::{
-    cmd_check_dsh_update, cmd_plugin_catalog, cmd_runtime_info, cmd_update_dsh_runtime,
-    default_plugin_ids, focus_main_or_harness, show_splash_window, start_harness, HarnessManager,
+    cmd_check_dsh_update, cmd_list_installed_plugins, cmd_plugin_catalog, cmd_remove_plugin,
+    cmd_runtime_info, cmd_safe_disable_all_plugins, cmd_update_dsh_runtime, default_plugin_ids,
+    focus_main_or_harness, show_splash_window, start_harness, HarnessManager,
 };
 use settings::{
     cmd_complete_plugin_wizard, cmd_get_desktop_settings, cmd_get_npm_settings,
@@ -17,7 +18,7 @@ use settings::{
     load_settings, DEFAULT_GLOBAL_SHORTCUT,
 };
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     Emitter,
 };
 
@@ -229,11 +230,57 @@ fn sync_autostart_from_settings(app: &tauri::AppHandle) {
     }
 }
 
+
+#[tauri::command]
+fn list_installed_plugins() -> Result<serde_json::Value, String> {
+    cmd_list_installed_plugins()
+}
+
+#[tauri::command]
+fn remove_plugin(name: String) -> Result<serde_json::Value, String> {
+    cmd_remove_plugin(name)
+}
+
+#[tauri::command]
+fn safe_disable_all_plugins() -> Result<serde_json::Value, String> {
+    cmd_safe_disable_all_plugins()
+}
+
+#[tauri::command]
+fn open_plugin_manager(app: tauri::AppHandle) -> Result<(), String> {
+    show_splash_window(&app);
+    let _ = app.emit("open-plugin-manager", serde_json::json!({
+        "hint": "若因不兼容插件无法启动，可在此卸载后重启"
+    }));
+    Ok(())
+}
+
 fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let restart = MenuItem::with_id(app, "restart_harness", "重启 dsh", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "desktop_settings", "桌面设置", true, None::<&str>)?;
     let wizard = MenuItem::with_id(app, "plugin_wizard", "插件向导", true, None::<&str>)?;
-    Menu::with_items(app, &[&restart, &settings, &wizard])
+    let plugin_mgr = MenuItem::with_id(app, "plugin_manager", "插件管理", true, None::<&str>)?;
+    let edit = Submenu::with_items(
+        app,
+        "编辑",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let app_menu = Submenu::with_items(
+        app,
+        "DSH Desktop",
+        true,
+        &[&restart, &settings, &wizard, &plugin_mgr],
+    )?;
+    Menu::with_items(app, &[&edit, &app_menu])
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -269,6 +316,10 @@ pub fn run() {
             install_cli_shim,
             remove_cli_shim,
             set_cli_shim_enabled,
+            list_installed_plugins,
+            remove_plugin,
+            safe_disable_all_plugins,
+            open_plugin_manager,
         ])
         .setup(move |app| {
             #[cfg(desktop)]
@@ -317,6 +368,15 @@ pub fn run() {
                             },
                         );
                     }
+                }
+                "plugin_manager" => {
+                    show_splash_window(app);
+                    let _ = app.emit(
+                        "open-plugin-manager",
+                        serde_json::json!({
+                            "hint": "若因不兼容插件无法启动，可在此卸载后重启"
+                        }),
+                    );
                 }
                 _ => {}
             });

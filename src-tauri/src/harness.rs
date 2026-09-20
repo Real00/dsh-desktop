@@ -822,6 +822,216 @@ fn open_dsh_window(app: &AppHandle, url: &str) -> Result<(), String> {
     Ok(())
 }
 
+
+const CORE_BUNDLES: &[&str] = &[
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+];
+
+fn is_core_bundle(name: &str) -> bool {
+    CORE_BUNDLES
+        .iter()
+        .any(|c| c.eq_ignore_ascii_case(name))
+}
+
+fn plugin_ids_matching_dep(name: &str) -> Vec<String> {
+    let mut ids = vec![name.to_string()];
+    for p in DEFAULT_PLUGINS {
+        let matches = p.id.eq_ignore_ascii_case(name)
+            || p.install_spec.eq_ignore_ascii_case(name)
+            || p.detect_needles
+                .iter()
+                .any(|n| name.eq_ignore_ascii_case(n) || name.to_ascii_lowercase().contains(&n.to_ascii_lowercase()));
+        if matches {
+            ids.push(p.id.to_string());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn drop_ids_from_bootstrap(ids: &[String]) -> Result<(), String> {
+    let Some(path) = bootstrap_marker_path() else {
+        return Ok(());
+    };
+    if !path.is_file() {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let remaining: Vec<String> = value
+        .get("plugins")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .filter(|id| {
+                    !ids.iter().any(|drop| {
+                        drop.eq_ignore_ascii_case(id)
+                            || id.to_ascii_lowercase().contains(&drop.to_ascii_lowercase())
+                            || drop.to_ascii_lowercase().contains(&id.to_ascii_lowercase())
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "plugins".into(),
+            serde_json::Value::Array(
+                remaining
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    std::fs::write(&path, format!("{body}\n")).map_err(|e| e.to_string())
+}
+
+fn remove_one_plugin(node: &str, bin_js: &PathBuf, name: &str) -> Result<(), String> {
+    let args = vec![
+        bin_js.to_string_lossy().to_string(),
+        "plugin".into(),
+        "--profile".into(),
+        "web".into(),
+        "remove".into(),
+        name.into(),
+    ];
+    let node = node.to_string();
+    let handle = thread::spawn(move || run_command(&node, &args));
+    let started = Instant::now();
+    loop {
+        if handle.is_finished() {
+            break;
+        }
+        if started.elapsed() > PLUGIN_INSTALL_TIMEOUT {
+            return Err(format!("卸载超时 / remove timed out: {name}"));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    handle
+        .join()
+        .map_err(|_| "remove thread panicked".to_string())?
+}
+
+pub fn cmd_list_installed_plugins() -> Result<serde_json::Value, String> {
+    let mut plugins = Vec::new();
+    if let Some(pkg) = web_profile_package_json() {
+        if let Ok(text) = std::fs::read_to_string(&pkg) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let Some(deps) = value.get("dependencies").and_then(|d| d.as_object()) {
+                    for (id, ver) in deps {
+                        let version = ver.as_str().map(|s| s.to_string());
+                        let core = is_core_bundle(id);
+                        plugins.push(serde_json::json!({
+                            "id": id,
+                            "version": version,
+                            "core": core,
+                            "removable": !core,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    plugins.sort_by(|a, b| {
+        let a_id = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let b_id = b.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        a_id.cmp(b_id)
+    });
+    Ok(serde_json::json!({ "plugins": plugins }))
+}
+
+pub fn cmd_remove_plugin(name: String) -> Result<serde_json::Value, String> {
+    let trimmed = name.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("插件名为空".into());
+    }
+    if is_core_bundle(&trimmed) {
+        return Err(format!("核心组件不可卸载：{trimmed}"));
+    }
+
+    ensure_path_for_gui();
+    let _ = crate::settings::apply_npm_registry_files();
+    let (node, bin_js) = ensure_managed_runtime(|_, _| {})?;
+    remove_one_plugin(&node, &bin_js, &trimmed)?;
+
+    let matching = plugin_ids_matching_dep(&trimmed);
+    let _ = drop_ids_from_bootstrap(&matching);
+    crate::settings::remove_from_selected_plugins(&matching)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "removed": trimmed,
+        "clearedIds": matching,
+    }))
+}
+
+/// Nuclear recovery: backup web profile package.json and clear non-core dependencies
+/// so the next launch will not load third-party plugins. Also clears selectedPlugins
+/// and bootstrap marker plugin list.
+pub fn cmd_safe_disable_all_plugins() -> Result<serde_json::Value, String> {
+    let pkg_path = web_profile_package_json().ok_or_else(|| "cannot resolve home dir".to_string())?;
+    if !pkg_path.is_file() {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "message": "web profile package.json 不存在，无需禁用",
+            "cleared": [],
+        }));
+    }
+
+    let text = std::fs::read_to_string(&pkg_path).map_err(|e| e.to_string())?;
+    let bak = pkg_path.with_file_name(format!(
+        "package.json.dsh-desktop-bak.{}",
+        chrono_like_now()
+    ));
+    std::fs::write(&bak, &text).map_err(|e| e.to_string())?;
+
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let mut cleared: Vec<String> = Vec::new();
+    if let Some(deps) = value
+        .get_mut("dependencies")
+        .and_then(|d| d.as_object_mut())
+    {
+        let keys: Vec<String> = deps.keys().cloned().collect();
+        for key in keys {
+            if is_core_bundle(&key) {
+                continue;
+            }
+            deps.remove(&key);
+            cleared.push(key);
+        }
+    }
+    let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    std::fs::write(&pkg_path, format!("{body}\n")).map_err(|e| e.to_string())?;
+
+    // Clear selection / bootstrap so wizard does not reinstall on next launch.
+    let matching: Vec<String> = {
+        let mut all = cleared.clone();
+        for name in &cleared {
+            all.extend(plugin_ids_matching_dep(name));
+        }
+        all.sort();
+        all.dedup();
+        all
+    };
+    let _ = drop_ids_from_bootstrap(&matching);
+    crate::settings::remove_from_selected_plugins(&matching)?;
+    // Also wipe selectedPlugins entirely for nuclear recovery.
+    crate::settings::clear_selected_plugins()?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "backup": bak.to_string_lossy(),
+        "cleared": cleared,
+    }))
+}
+
 pub fn cmd_check_dsh_update() -> Result<serde_json::Value, String> {
     let (current, latest, update_available) = check_dsh_update()?;
     Ok(serde_json::json!({

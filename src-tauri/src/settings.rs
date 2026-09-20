@@ -224,6 +224,36 @@ pub fn selected_plugin_ids() -> Vec<String> {
         .unwrap_or_default()
 }
 
+
+pub fn remove_from_selected_plugins(ids: &[String]) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut settings = load_settings();
+    let Some(ref mut selected) = settings.selected_plugins else {
+        return Ok(());
+    };
+    let before = selected.len();
+    selected.retain(|id| {
+        !ids.iter().any(|drop| {
+            drop.eq_ignore_ascii_case(id)
+                || id.to_ascii_lowercase().contains(&drop.to_ascii_lowercase())
+                || drop.to_ascii_lowercase().contains(&id.to_ascii_lowercase())
+        })
+    });
+    if selected.len() != before {
+        save_settings(&settings)?;
+    }
+    Ok(())
+}
+
+pub fn clear_selected_plugins() -> Result<(), String> {
+    let mut settings = load_settings();
+    settings.selected_plugins = Some(Vec::new());
+    save_settings(&settings)
+}
+
+
 pub fn cmd_get_desktop_settings() -> Result<serde_json::Value, String> {
     let s = load_settings();
     Ok(serde_json::json!({

@@ -63,6 +63,22 @@
           <p id="wizard-status" class="npm-status" hidden></p>
         </section>
 
+
+        <!-- Plugin manager (works on splash-only / harness failure) -->
+        <section id="plugin-manager" class="plugin-manager" hidden>
+          <h2 class="wizard-title">已安装插件</h2>
+          <p id="plugin-manager-hint" class="wizard-desc" hidden>
+            若因不兼容插件无法启动，可在此卸载后重启
+          </p>
+          <div id="installed-plugins-list" class="installed-plugins-list"></div>
+          <div class="wizard-actions">
+            <button id="plugin-manager-refresh" class="retry secondary" type="button">刷新列表</button>
+            <button id="plugin-manager-restart" class="retry" type="button">重启 dsh</button>
+            <button id="plugin-manager-disable-all" class="retry secondary" type="button">禁用全部插件</button>
+          </div>
+          <p id="plugin-manager-status" class="npm-status" hidden></p>
+        </section>
+
         <pre id="detail" class="detail" hidden></pre>
         <p id="gatekeeper-note" class="gatekeeper-note" hidden></p>
         <p id="update" class="update" hidden></p>
@@ -147,6 +163,16 @@
             <div class="npm-actions">
               <button id="shim-install" class="retry secondary" type="button">安装 CLI shim</button>
               <button id="shim-remove" class="retry secondary" type="button">移除 shim</button>
+            </div>
+
+            <hr class="settings-divider" />
+
+            <p class="settings-section-title">已安装插件</p>
+            <p class="settings-hint">若启动失败，可卸载不兼容插件后重启（无需进入 Harness UI）。</p>
+            <div id="settings-installed-plugins" class="installed-plugins-list"></div>
+            <div class="npm-actions">
+              <button id="settings-plugins-refresh" class="retry secondary" type="button">刷新插件列表</button>
+              <button id="settings-open-plugin-mgr" class="retry secondary" type="button">打开插件管理</button>
             </div>
 
             <hr class="settings-divider" />

@@ -34,6 +34,14 @@ type DesktopSettings = {
   defaultShortcut: string;
 };
 
+
+type InstalledPlugin = {
+  id: string;
+  version?: string | null;
+  core?: boolean;
+  removable?: boolean;
+};
+
 type ShimStatus = {
   path: string;
   installed: boolean;
@@ -103,6 +111,18 @@ const wizardPluginsEl = () =>
   document.querySelector<HTMLElement>("#wizard-plugins");
 const wizardStatusEl = () =>
   document.querySelector<HTMLElement>("#wizard-status");
+
+const pluginManagerEl = () =>
+  document.querySelector<HTMLElement>("#plugin-manager");
+const pluginManagerHintEl = () =>
+  document.querySelector<HTMLElement>("#plugin-manager-hint");
+const installedPluginsListEl = () =>
+  document.querySelector<HTMLElement>("#installed-plugins-list");
+const settingsInstalledPluginsEl = () =>
+  document.querySelector<HTMLElement>("#settings-installed-plugins");
+const pluginManagerStatusEl = () =>
+  document.querySelector<HTMLElement>("#plugin-manager-status");
+
 
 let inErrorState = false;
 let lastErrorText = "";
@@ -204,6 +224,12 @@ function showError(message: string) {
   if (looksLikeNetworkError(message)) {
     openNpmSettings();
   }
+
+  // Harness failed — offer plugin recovery without needing the harness UI.
+  showPluginManager({
+    hint: "若因不兼容插件无法启动，可在此卸载后重启",
+    recovery: true,
+  });
 
   const gk = gatekeeperEl();
   if (gk) {
@@ -617,9 +643,152 @@ async function removeShim() {
   }
 }
 
+
+function setPluginManagerStatus(message: string, isError = false) {
+  const el = pluginManagerStatusEl();
+  if (!el) return;
+  el.hidden = !message;
+  el.textContent = message;
+  el.classList.toggle("error", isError);
+  setNpmStatus(message, isError);
+}
+
+function showPluginManager(opts?: { hint?: string; recovery?: boolean }) {
+  const panel = pluginManagerEl();
+  if (!panel) return;
+  panel.hidden = false;
+  panel.classList.toggle("recovery", !!opts?.recovery || !!opts?.hint);
+  const hint = pluginManagerHintEl();
+  if (hint) {
+    const text =
+      opts?.hint ||
+      "若因不兼容插件无法启动，可在此卸载后重启";
+    hint.textContent = text;
+    hint.hidden = !(opts?.recovery || opts?.hint);
+  }
+  openNpmSettings();
+  void loadInstalledPlugins();
+}
+
+function hidePluginManagerHintOnly() {
+  const hint = pluginManagerHintEl();
+  if (hint) hint.hidden = true;
+  pluginManagerEl()?.classList.remove("recovery");
+}
+
+function renderInstalledPlugins(
+  plugins: InstalledPlugin[],
+  target: HTMLElement | null,
+) {
+  if (!target) return;
+  target.innerHTML = "";
+  const removable = plugins.filter((p) => p.removable !== false && !p.core);
+  const core = plugins.filter((p) => p.core);
+  const show = [...removable, ...core];
+  if (show.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "installed-plugins-empty";
+    empty.textContent = "暂无已安装的第三方插件";
+    target.appendChild(empty);
+    return;
+  }
+  for (const p of show) {
+    const row = document.createElement("div");
+    row.className = "installed-plugin-row";
+    const meta = document.createElement("div");
+    meta.className = "installed-plugin-meta";
+    const title = document.createElement("strong");
+    title.textContent = p.id;
+    meta.appendChild(title);
+    const sub = document.createElement("small");
+    const bits: string[] = [];
+    if (p.version) bits.push(p.version);
+    if (p.core) bits.push("核心（不可卸载）");
+    sub.textContent = bits.join(" · ") || "已安装";
+    meta.appendChild(sub);
+    row.appendChild(meta);
+    if (!p.core && p.removable !== false) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "retry secondary";
+      btn.textContent = "卸载";
+      btn.addEventListener("click", () => {
+        void uninstallPlugin(p.id);
+      });
+      row.appendChild(btn);
+    }
+    target.appendChild(row);
+  }
+}
+
+async function loadInstalledPlugins() {
+  try {
+    const result = await invoke<{ plugins: InstalledPlugin[] }>(
+      "list_installed_plugins",
+    );
+    const plugins = result.plugins || [];
+    renderInstalledPlugins(plugins, installedPluginsListEl());
+    renderInstalledPlugins(plugins, settingsInstalledPluginsEl());
+  } catch (e) {
+    setPluginManagerStatus(`读取插件列表失败：${e}`, true);
+    const msg = `读取失败：${e}`;
+    for (const el of [
+      installedPluginsListEl(),
+      settingsInstalledPluginsEl(),
+    ]) {
+      if (!el) continue;
+      el.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "installed-plugins-empty";
+      p.textContent = msg;
+      el.appendChild(p);
+    }
+  }
+}
+
+async function uninstallPlugin(name: string) {
+  if (!confirm(`确认卸载插件「${name}」？\n卸载后建议重启 dsh。`)) {
+    return;
+  }
+  setPluginManagerStatus(`正在卸载 ${name}…`);
+  try {
+    await invoke("remove_plugin", { name });
+    setPluginManagerStatus(`已卸载 ${name}，请点击「重启 dsh」`);
+    await loadInstalledPlugins();
+  } catch (e) {
+    setPluginManagerStatus(`卸载失败：${e}`, true);
+  }
+}
+
+async function disableAllPlugins() {
+  if (
+    !confirm(
+      "确认禁用全部第三方插件？\n将备份 package.json 并清空依赖，然后可重启 dsh 恢复启动。",
+    )
+  ) {
+    return;
+  }
+  setPluginManagerStatus("正在禁用全部插件…");
+  try {
+    const result = await invoke<{
+      ok: boolean;
+      backup?: string;
+      cleared?: string[];
+    }>("safe_disable_all_plugins");
+    const n = result.cleared?.length ?? 0;
+    setPluginManagerStatus(
+      `已禁用 ${n} 个插件（备份：${result.backup || "—"}）。请重启 dsh。`,
+    );
+    await loadInstalledPlugins();
+  } catch (e) {
+    setPluginManagerStatus(`禁用失败：${e}`, true);
+  }
+}
+
 async function restart() {
   clearError();
   hideWizard();
+  hidePluginManagerHintOnly();
   setBootStep("check");
   setStatus("正在重新启动…");
   await invoke("restart_harness");
@@ -907,8 +1076,41 @@ window.addEventListener("DOMContentLoaded", async () => {
       void removeShim();
     });
 
+  document
+    .querySelector<HTMLButtonElement>("#plugin-manager-refresh")
+    ?.addEventListener("click", () => {
+      void loadInstalledPlugins();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#plugin-manager-restart")
+    ?.addEventListener("click", () => {
+      void restart();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#plugin-manager-disable-all")
+    ?.addEventListener("click", () => {
+      void disableAllPlugins();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#settings-plugins-refresh")
+    ?.addEventListener("click", () => {
+      void loadInstalledPlugins();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#settings-open-plugin-mgr")
+    ?.addEventListener("click", () => {
+      showPluginManager();
+    });
+
   await listen<HarnessEvent>("harness", (event) => {
     handleHarnessEvent(event.payload);
+  });
+
+  await listen<{ hint?: string }>("open-plugin-manager", (event) => {
+    showPluginManager({
+      hint: event.payload?.hint,
+      recovery: true,
+    });
   });
 
   await listen<AppUpdateEvent>("app-update", (event) => {
@@ -926,6 +1128,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   });
   void loadDesktopSettings();
   void loadShimStatus();
+  void loadInstalledPlugins();
   void checkAppUpdate();
 
   if (!(await pollExistingUrl())) {
