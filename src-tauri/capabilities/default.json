@@ -13,6 +13,17 @@
     "core:window:allow-set-focus",
     "core:window:allow-unminimize",
     "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "$HOME/.dsh-desktop/updates"
+        },
+        {
+          "path": "$HOME/.dsh-desktop/updates/**"
+        }
+      ]
+    },
     "window-state:default",
     "autostart:allow-enable",
     "autostart:allow-disable",
