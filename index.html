@@ -17,18 +17,22 @@
         min-height: 100vh;
         display: grid;
         place-items: center;
-        padding: 24px;
+        padding: 16px;
       }
       .boot-card {
-        width: min(480px, 100%);
-        padding: 32px 28px 24px;
+        width: min(560px, 100%);
+        max-height: 90vh;
+        padding: 24px 22px 18px;
         border-radius: 20px;
         background: rgba(16, 22, 40, 0.88);
         border: 1px solid rgba(255, 255, 255, 0.08);
         text-align: center;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
       }
       .boot-brand { font-size: 1.6rem; font-weight: 700; }
-      .boot-sub { margin: 6px 0 18px; color: #9db0d4; }
+      .boot-sub { margin: 6px 0 14px; color: #9db0d4; }
       .boot-status { margin: 0; color: #d7e3ff; }
     </style>
     <link rel="stylesheet" href="/src/styles.css" />
@@ -53,7 +57,7 @@
         <!-- First-run / reopenable plugin wizard -->
         <section id="plugin-wizard" class="plugin-wizard" hidden>
           <h2 class="wizard-title">选择推荐插件</h2>
-          <p class="wizard-desc">首次启动可勾选要安装的插件，也可稍后在桌面设置中重新打开。</p>
+          <p class="wizard-desc">首次启动可勾选要安装的插件，也可稍后在控制面板中重新打开。</p>
           <div id="wizard-plugins" class="wizard-plugins"></div>
           <div class="wizard-actions">
             <button id="wizard-install" class="retry" type="button">安装所选</button>
@@ -63,8 +67,7 @@
           <p id="wizard-status" class="npm-status" hidden></p>
         </section>
 
-
-        <!-- Plugin manager (works on splash-only / harness failure) -->
+        <!-- Plugin manager (recovery mode / full management overlay) -->
         <section id="plugin-manager" class="plugin-manager" hidden>
           <h2 class="wizard-title">已安装插件</h2>
           <p id="plugin-manager-hint" class="wizard-desc" hidden>
@@ -109,85 +112,163 @@
           <p id="app-update-progress" class="app-update-progress" hidden></p>
         </div>
 
-        <details class="npm-settings desktop-settings" open>
-          <summary>桌面设置</summary>
-          <div class="npm-settings-body">
-            <p class="settings-section-title">npm 源</p>
-            <p id="npm-current" class="npm-current">当前：加载中…</p>
-            <div class="npm-presets" role="radiogroup" aria-label="npm 源预设">
-              <label class="npm-preset">
-                <input type="radio" name="npm-preset" value="official" />
-                <span>官方 (npmjs)</span>
-              </label>
-              <label class="npm-preset">
-                <input type="radio" name="npm-preset" value="npmmirror" />
-                <span>淘宝镜像 (npmmirror)</span>
-              </label>
-              <label class="npm-preset">
-                <input type="radio" name="npm-preset" value="custom" />
-                <span>自定义</span>
-              </label>
+        <details class="npm-settings desktop-settings control-panel">
+          <summary>控制面板</summary>
+          <div class="control-panel-body npm-settings-body">
+            <div class="control-tabs" role="tablist" aria-label="控制面板分区">
+              <button
+                type="button"
+                class="control-tab active"
+                role="tab"
+                id="tab-btn-plugins"
+                data-tab="plugins"
+                aria-selected="true"
+                aria-controls="tab-panel-plugins"
+              >
+                插件
+              </button>
+              <button
+                type="button"
+                class="control-tab"
+                role="tab"
+                id="tab-btn-network"
+                data-tab="network"
+                aria-selected="false"
+                aria-controls="tab-panel-network"
+              >
+                网络
+              </button>
+              <button
+                type="button"
+                class="control-tab"
+                role="tab"
+                id="tab-btn-startup"
+                data-tab="startup"
+                aria-selected="false"
+                aria-controls="tab-panel-startup"
+              >
+                启动
+              </button>
+              <button
+                type="button"
+                class="control-tab"
+                role="tab"
+                id="tab-btn-advanced"
+                data-tab="advanced"
+                aria-selected="false"
+                aria-controls="tab-panel-advanced"
+              >
+                高级
+              </button>
             </div>
-            <input
-              id="npm-custom-url"
-              class="npm-custom-url"
-              type="url"
-              placeholder="https://registry.example.com"
+
+            <div
+              id="tab-panel-plugins"
+              class="control-tab-panel active"
+              role="tabpanel"
+              data-tab-panel="plugins"
+              aria-labelledby="tab-btn-plugins"
+            >
+              <p class="settings-hint">
+                下方为已安装插件摘要。完整恢复操作（含禁用全部）请点「管理插件」。
+              </p>
+              <div id="settings-installed-plugins" class="installed-plugins-list compact"></div>
+              <div class="npm-actions">
+                <button id="settings-plugins-refresh" class="retry secondary" type="button">
+                  刷新列表
+                </button>
+                <button id="settings-open-plugin-mgr" class="retry secondary" type="button">
+                  管理插件
+                </button>
+                <button id="reopen-wizard-btn" class="retry secondary" type="button">
+                  打开插件向导
+                </button>
+              </div>
+            </div>
+
+            <div
+              id="tab-panel-network"
+              class="control-tab-panel"
+              role="tabpanel"
+              data-tab-panel="network"
+              aria-labelledby="tab-btn-network"
               hidden
-            />
-            <div class="npm-actions">
-              <button id="npm-save" class="retry secondary" type="button">保存 npm 源</button>
-              <button id="npm-save-retry" class="retry" type="button" hidden>保存并重试</button>
-              <button id="check-app-update-btn" class="retry secondary" type="button">检查应用更新</button>
+            >
+              <p class="settings-section-title">npm 源</p>
+              <p id="npm-current" class="npm-current">当前：加载中…</p>
+              <div class="npm-presets" role="radiogroup" aria-label="npm 源预设">
+                <label class="npm-preset">
+                  <input type="radio" name="npm-preset" value="official" />
+                  <span>官方 (npmjs)</span>
+                </label>
+                <label class="npm-preset">
+                  <input type="radio" name="npm-preset" value="npmmirror" />
+                  <span>淘宝镜像 (npmmirror)</span>
+                </label>
+                <label class="npm-preset">
+                  <input type="radio" name="npm-preset" value="custom" />
+                  <span>自定义</span>
+                </label>
+              </div>
+              <input
+                id="npm-custom-url"
+                class="npm-custom-url"
+                type="url"
+                placeholder="https://registry.example.com"
+                hidden
+              />
+              <div class="npm-actions">
+                <button id="npm-save" class="retry secondary" type="button">保存 npm 源</button>
+                <button id="npm-save-retry" class="retry" type="button" hidden>保存并重试</button>
+                <button id="check-app-update-btn" class="retry secondary" type="button">
+                  检查应用更新
+                </button>
+              </div>
             </div>
 
-            <hr class="settings-divider" />
-
-            <p class="settings-section-title">启动与快捷键</p>
-            <label class="npm-preset">
-              <input id="autostart-toggle" type="checkbox" />
-              <span>开机自动启动</span>
-            </label>
-            <label class="npm-preset" style="margin-top: 8px;">
-              <input id="shortcut-enabled" type="checkbox" />
-              <span>启用全局快捷键（显示/聚焦窗口）</span>
-            </label>
-            <input
-              id="shortcut-input"
-              class="npm-custom-url"
-              type="text"
-              placeholder="CommandOrControl+Shift+D"
-            />
-            <div class="npm-actions">
-              <button id="shortcut-save" class="retry secondary" type="button">保存快捷键</button>
+            <div
+              id="tab-panel-startup"
+              class="control-tab-panel"
+              role="tabpanel"
+              data-tab-panel="startup"
+              aria-labelledby="tab-btn-startup"
+              hidden
+            >
+              <p class="settings-section-title">启动与快捷键</p>
+              <label class="npm-preset">
+                <input id="autostart-toggle" type="checkbox" />
+                <span>开机自动启动</span>
+              </label>
+              <label class="npm-preset npm-preset-spaced">
+                <input id="shortcut-enabled" type="checkbox" />
+                <span>启用全局快捷键（显示/聚焦窗口）</span>
+              </label>
+              <input
+                id="shortcut-input"
+                class="npm-custom-url"
+                type="text"
+                placeholder="CommandOrControl+Shift+D"
+              />
+              <div class="npm-actions">
+                <button id="shortcut-save" class="retry secondary" type="button">保存快捷键</button>
+              </div>
             </div>
 
-            <hr class="settings-divider" />
-
-            <p class="settings-section-title">CLI shim（dsh 命令）</p>
-            <p id="shim-status" class="npm-current">加载中…</p>
-            <p id="shim-hint" class="settings-hint"></p>
-            <div class="npm-actions">
-              <button id="shim-install" class="retry secondary" type="button">安装 CLI shim</button>
-              <button id="shim-remove" class="retry secondary" type="button">移除 shim</button>
-            </div>
-
-            <hr class="settings-divider" />
-
-            <p class="settings-section-title">已安装插件</p>
-            <p class="settings-hint">若启动失败，可卸载不兼容插件后重启（无需进入 Harness UI）。</p>
-            <div id="settings-installed-plugins" class="installed-plugins-list"></div>
-            <div class="npm-actions">
-              <button id="settings-plugins-refresh" class="retry secondary" type="button">刷新插件列表</button>
-              <button id="settings-open-plugin-mgr" class="retry secondary" type="button">打开插件管理</button>
-            </div>
-
-            <hr class="settings-divider" />
-
-            <p class="settings-section-title">插件与进程</p>
-            <div class="npm-actions">
-              <button id="reopen-wizard-btn" class="retry secondary" type="button">打开插件向导</button>
-              <button id="settings-restart-btn" class="retry secondary" type="button">重启 dsh</button>
+            <div
+              id="tab-panel-advanced"
+              class="control-tab-panel"
+              role="tabpanel"
+              data-tab-panel="advanced"
+              aria-labelledby="tab-btn-advanced"
+              hidden
+            >
+              <p class="settings-section-title">CLI shim（dsh 命令）</p>
+              <p id="shim-status" class="npm-current">加载中…</p>
+              <p id="shim-hint" class="settings-hint"></p>
+              <div class="npm-actions">
+                <button id="shim-install" class="retry secondary" type="button">安装 CLI shim</button>
+                <button id="shim-remove" class="retry secondary" type="button">移除 shim</button>
+              </div>
             </div>
 
             <p id="npm-status" class="npm-status" hidden></p>

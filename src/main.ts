@@ -206,9 +206,43 @@ function looksLikeNetworkError(message: string): boolean {
   ].some((k) => m.includes(k));
 }
 
-function openNpmSettings() {
+type ControlTab = "plugins" | "network" | "startup" | "advanced";
+
+function setControlPanelTab(tab: ControlTab) {
+  const tabs = document.querySelectorAll<HTMLButtonElement>(".control-tab");
+  const panels = document.querySelectorAll<HTMLElement>(".control-tab-panel");
+  tabs.forEach((btn) => {
+    const active = btn.dataset.tab === tab;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  panels.forEach((panel) => {
+    const active = panel.dataset.tabPanel === tab;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+}
+
+function openNpmSettings(tab: ControlTab = "network") {
   const details = npmSettingsEl();
   if (details) details.open = true;
+  setControlPanelTab(tab);
+}
+
+function wireControlPanelTabs() {
+  document.querySelectorAll<HTMLButtonElement>(".control-tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.tab as ControlTab | undefined;
+      if (
+        tab === "plugins" ||
+        tab === "network" ||
+        tab === "startup" ||
+        tab === "advanced"
+      ) {
+        setControlPanelTab(tab);
+      }
+    });
+  });
 }
 
 function showError(message: string) {
@@ -676,7 +710,17 @@ function showPluginManager(opts?: { hint?: string; recovery?: boolean }) {
     hint.textContent = text;
     hint.hidden = !(opts?.recovery || opts?.hint);
   }
-  openNpmSettings();
+  // Recovery overlay stays separate; optionally open 插件 tab for context.
+  if (opts?.recovery || opts?.hint) {
+    const details = npmSettingsEl();
+    if (details && !details.open) {
+      // Keep control panel collapsed on recovery so splash stays short.
+    } else if (details?.open) {
+      setControlPanelTab("plugins");
+    }
+  } else {
+    openNpmSettings("plugins");
+  }
   void loadInstalledPlugins();
 }
 
@@ -1041,17 +1085,13 @@ function handleHarnessEvent(payload: HarnessEvent) {
 
 window.addEventListener("DOMContentLoaded", async () => {
   setBootStep("check");
+  wireControlPanelTabs();
 
   retryEl()?.addEventListener("click", () => {
     void restart();
   });
   document
     .querySelector<HTMLButtonElement>("#restart-harness-btn")
-    ?.addEventListener("click", () => {
-      void restart();
-    });
-  document
-    .querySelector<HTMLButtonElement>("#settings-restart-btn")
     ?.addEventListener("click", () => {
       void restart();
     });
@@ -1163,7 +1203,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   document
     .querySelector<HTMLButtonElement>("#settings-open-plugin-mgr")
     ?.addEventListener("click", () => {
-      showPluginManager();
+      showPluginManager({
+        hint: "可在此卸载不兼容插件，或禁用全部后重启",
+        recovery: true,
+      });
     });
 
   await listen<HarnessEvent>("harness", (event) => {
