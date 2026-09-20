@@ -498,3 +498,32 @@ body {
 .shell.error .plugin-manager:not([hidden]) {
   display: block;
 }
+
+
+.plugin-confirm {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 200, 120, 0.4);
+  text-align: left;
+}
+
+.plugin-confirm-msg {
+  margin: 0 0 8px;
+  font-size: 0.85rem;
+  color: #ffe8c8;
+  line-height: 1.45;
+}
+
+.plugin-confirm-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.plugin-confirm-actions .retry {
+  margin-top: 0;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+}

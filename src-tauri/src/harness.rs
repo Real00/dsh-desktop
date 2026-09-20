@@ -946,6 +946,53 @@ pub fn cmd_list_installed_plugins() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "plugins": plugins }))
 }
 
+/// Drop matching non-core deps from ~/.dsh/profiles/web/package.json.
+/// Returns the dependency keys that were removed. Does not require pnpm/CLI.
+fn drop_dep_from_web_package_json(name: &str) -> Result<Vec<String>, String> {
+    let Some(pkg_path) = web_profile_package_json() else {
+        return Ok(Vec::new());
+    };
+    if !pkg_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&pkg_path).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let matching_ids = plugin_ids_matching_dep(name);
+    let mut removed: Vec<String> = Vec::new();
+    if let Some(deps) = value
+        .get_mut("dependencies")
+        .and_then(|d| d.as_object_mut())
+    {
+        let keys: Vec<String> = deps.keys().cloned().collect();
+        for key in keys {
+            if is_core_bundle(&key) {
+                continue;
+            }
+            let hit = key.eq_ignore_ascii_case(name)
+                || matching_ids.iter().any(|id| {
+                    key.eq_ignore_ascii_case(id)
+                        || id.eq_ignore_ascii_case(&key)
+                        || key
+                            .to_ascii_lowercase()
+                            .contains(&id.to_ascii_lowercase())
+                        || id
+                            .to_ascii_lowercase()
+                            .contains(&key.to_ascii_lowercase())
+                });
+            if hit {
+                deps.remove(&key);
+                removed.push(key);
+            }
+        }
+    }
+    if !removed.is_empty() {
+        let body = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+        std::fs::write(&pkg_path, format!("{body}\n")).map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
+}
+
 pub fn cmd_remove_plugin(name: String) -> Result<serde_json::Value, String> {
     let trimmed = name.trim().to_string();
     if trimmed.is_empty() {
@@ -955,19 +1002,39 @@ pub fn cmd_remove_plugin(name: String) -> Result<serde_json::Value, String> {
         return Err(format!("核心组件不可卸载：{trimmed}"));
     }
 
-    ensure_path_for_gui();
-    let _ = crate::settings::apply_npm_registry_files();
-    let (node, bin_js) = ensure_managed_runtime(|_, _| {})?;
-    remove_one_plugin(&node, &bin_js, &trimmed)?;
+    // Primary path: edit package.json directly (no pnpm required).
+    let removed_deps = drop_dep_from_web_package_json(&trimmed)?;
 
     let matching = plugin_ids_matching_dep(&trimmed);
-    let _ = drop_ids_from_bootstrap(&matching);
-    crate::settings::remove_from_selected_plugins(&matching)?;
+    let mut cleared_ids = matching.clone();
+    cleared_ids.extend(removed_deps.iter().cloned());
+    cleared_ids.sort();
+    cleared_ids.dedup();
+
+    let _ = drop_ids_from_bootstrap(&cleared_ids);
+    crate::settings::remove_from_selected_plugins(&cleared_ids)?;
+
+    // Best-effort CLI `plugin remove` — optional; must not fail the command
+    // if package.json / bootstrap / selectedPlugins were already updated.
+    let mut cli_ok = false;
+    let mut cli_error: Option<String> = None;
+    ensure_path_for_gui();
+    let _ = crate::settings::apply_npm_registry_files();
+    match ensure_managed_runtime(|_, _| {}) {
+        Ok((node, bin_js)) => match remove_one_plugin(&node, &bin_js, &trimmed) {
+            Ok(()) => cli_ok = true,
+            Err(e) => cli_error = Some(e),
+        },
+        Err(e) => cli_error = Some(e),
+    }
 
     Ok(serde_json::json!({
         "ok": true,
         "removed": trimmed,
-        "clearedIds": matching,
+        "removedDeps": removed_deps,
+        "clearedIds": cleared_ids,
+        "cliOk": cli_ok,
+        "cliError": cli_error,
     }))
 }
 

@@ -122,7 +122,17 @@ const settingsInstalledPluginsEl = () =>
   document.querySelector<HTMLElement>("#settings-installed-plugins");
 const pluginManagerStatusEl = () =>
   document.querySelector<HTMLElement>("#plugin-manager-status");
+const pluginConfirmEl = () =>
+  document.querySelector<HTMLElement>("#plugin-confirm");
+const pluginConfirmMsgEl = () =>
+  document.querySelector<HTMLElement>("#plugin-confirm-msg");
 
+type PluginConfirmPending =
+  | { kind: "remove"; name: string }
+  | { kind: "disable-all" }
+  | null;
+
+let pluginConfirmPending: PluginConfirmPending = null;
 
 let inErrorState = false;
 let lastErrorText = "";
@@ -713,7 +723,7 @@ function renderInstalledPlugins(
       btn.className = "retry secondary";
       btn.textContent = "卸载";
       btn.addEventListener("click", () => {
-        void uninstallPlugin(p.id);
+        requestUninstallPlugin(p.id);
       });
       row.appendChild(btn);
     }
@@ -746,10 +756,60 @@ async function loadInstalledPlugins() {
   }
 }
 
-async function uninstallPlugin(name: string) {
-  if (!confirm(`确认卸载插件「${name}」？\n卸载后建议重启 dsh。`)) {
-    return;
+function hidePluginConfirm() {
+  pluginConfirmPending = null;
+  const bar = pluginConfirmEl();
+  if (bar) bar.hidden = true;
+}
+
+function showPluginConfirm(
+  pending: Exclude<PluginConfirmPending, null>,
+  message: string,
+) {
+  pluginConfirmPending = pending;
+  const msg = pluginConfirmMsgEl();
+  if (msg) msg.textContent = message;
+  const bar = pluginConfirmEl();
+  if (bar) bar.hidden = false;
+}
+
+function requestUninstallPlugin(name: string) {
+  const message = `确认卸载插件「${name}」？卸载后建议重启 dsh。`;
+  setPluginManagerStatus(`准备卸载 ${name}…`);
+  showPluginConfirm({ kind: "remove", name }, message);
+}
+
+function requestDisableAllPlugins() {
+  const message =
+    "确认禁用全部第三方插件？将备份 package.json 并清空依赖，然后可重启 dsh 恢复启动。";
+  setPluginManagerStatus("准备禁用全部插件…");
+  showPluginConfirm({ kind: "disable-all" }, message);
+}
+
+async function confirmPluginAction() {
+  const pending = pluginConfirmPending;
+  hidePluginConfirm();
+  if (!pending) return;
+  if (pending.kind === "remove") {
+    await doUninstallPlugin(pending.name);
+  } else {
+    await doDisableAllPlugins();
   }
+}
+
+function cancelPluginConfirm() {
+  const pending = pluginConfirmPending;
+  hidePluginConfirm();
+  if (pending?.kind === "remove") {
+    setPluginManagerStatus(`已取消卸载 ${pending.name}`);
+  } else if (pending?.kind === "disable-all") {
+    setPluginManagerStatus("已取消禁用全部插件");
+  } else {
+    setPluginManagerStatus("已取消");
+  }
+}
+
+async function doUninstallPlugin(name: string) {
   setPluginManagerStatus(`正在卸载 ${name}…`);
   try {
     await invoke("remove_plugin", { name });
@@ -760,14 +820,7 @@ async function uninstallPlugin(name: string) {
   }
 }
 
-async function disableAllPlugins() {
-  if (
-    !confirm(
-      "确认禁用全部第三方插件？\n将备份 package.json 并清空依赖，然后可重启 dsh 恢复启动。",
-    )
-  ) {
-    return;
-  }
+async function doDisableAllPlugins() {
   setPluginManagerStatus("正在禁用全部插件…");
   try {
     const result = await invoke<{
@@ -1089,7 +1142,18 @@ window.addEventListener("DOMContentLoaded", async () => {
   document
     .querySelector<HTMLButtonElement>("#plugin-manager-disable-all")
     ?.addEventListener("click", () => {
-      void disableAllPlugins();
+      requestDisableAllPlugins();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#plugin-confirm-ok")
+    ?.addEventListener("click", () => {
+      setPluginManagerStatus("已确认，正在执行…");
+      void confirmPluginAction();
+    });
+  document
+    .querySelector<HTMLButtonElement>("#plugin-confirm-cancel")
+    ?.addEventListener("click", () => {
+      cancelPluginConfirm();
     });
   document
     .querySelector<HTMLButtonElement>("#settings-plugins-refresh")
